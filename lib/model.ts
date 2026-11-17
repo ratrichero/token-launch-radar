@@ -89,6 +89,7 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  farm_steps: string[];
 }
 
 export interface LiveRow {
@@ -113,6 +114,7 @@ export interface RadarData {
   peer_table: PeerStats[];
   rows: RadarRow[];
   live: LiveRow[];
+  watchlist: string[];
 }
 
 export class SnapshotError extends Error {
@@ -396,6 +398,7 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    farm_steps: row.farm_steps,
   };
 }
 
@@ -415,6 +418,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     peer_table: peerTable,
     rows: board.map(radarRow),
     live,
+    watchlist: snapshot.watchlist.slice(),
   };
   return { board, radar, peerTable, globalMedian };
 }

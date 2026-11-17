@@ -3,17 +3,79 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Launch Radar - PLACEHOLDER (Phase 1)</title>
+<title>Token Launch Radar</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<header><h1>Token Launch Radar</h1><p class="ph">Phase 1 placeholder dashboard - Phase 2 ships the full UI</p></header>
+<header id="top">
+  <div class="brand"><span class="mark"></span>Token Launch Radar</div>
+  <p class="tag">Pre-token protocols, ranked by the implied value of the token their record points to. Not a price prediction.</p>
+  <div class="meta" id="meta"></div>
+  <nav class="tabs">
+    <button class="tab" data-view="board">Board</button>
+    <button class="tab" data-view="live">Live tokens</button>
+    <button class="tab" data-view="peers">Peer multiples</button>
+    <button class="tab" data-view="model">Value model</button>
+  </nav>
+</header>
+
 <main>
-<section id="board"><h2>Ranked board (placeholder)</h2><p>Loading board data...</p><div id="rows"></div></section>
-<section id="live"><h2>Live token set-aside (placeholder)</h2><p>Market values, not ranked. Loaded from data.js.</p></section>
-<section id="method"><h2>Model (placeholder)</h2><p>implied = TVL x peerMultiple(category) x growthMult x maturityMult x chainMult</p></section>
+<section id="board" class="view">
+  <div class="stats" id="stats"></div>
+  <div class="controls">
+    <input id="search" type="search" placeholder="Search name or slug…" autocomplete="off">
+    <select id="category"><option value="">All categories</option></select>
+    <select id="chain"><option value="">All chains</option></select>
+    <select id="sort">
+      <option value="rank">Sort: implied rank</option>
+      <option value="tvl">Sort: TVL</option>
+      <option value="implied">Sort: implied value</option>
+      <option value="change">Sort: 7d change</option>
+    </select>
+    <button id="watch" class="toggle" aria-pressed="false">Watchlist 40 only</button>
+    <button id="reset" class="ghost">Reset</button>
+  </div>
+  <div class="line" id="count"></div>
+  <div class="tablewrap">
+    <table id="boardtable">
+      <thead><tr>
+        <th class="crit-pos">#</th><th class="cname">Protocol</th><th>Category</th><th>Chains</th>
+        <th>TVL</th><th>7d</th><th>Age</th><th class="big">Implied value</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <p class="foot">Click a row for the full model breakdown, the peer it was priced against, and its farm steps.</p>
+</section>
+
+<section id="detail" class="view hidden"></section>
+
+<section id="live" class="view hidden">
+  <button class="back">Back to board</button>
+  <h2>Live tokens <span>set aside for comparison, never ranked on the board</span></h2>
+  <p class="lead">These protocols record a token and a market capital, so they are not launches to catch. Their implied value, if the board's model priced them the same way, is what a reader would compare a farm against today.</p>
+  <div class="tablewrap"><table id="livetable"><thead><tr>
+    <th>Protocol</th><th>Category</th><th>Chains</th><th>TVL</th><th>7d</th><th>Market cap</th><th>mcap / TVL</th>
+  </tr></thead><tbody id="liverows"></tbody></table></div>
+</section>
+
+<section id="peers" class="view hidden">
+  <button class="back">Back to board</button>
+  <h2>Peer multiples <span>how the snapshot prices a category</span></h2>
+  <p id="peersum" class="lead"></p>
+  <div class="tablewrap"><table id="peertable"><thead><tr>
+    <th>#</th><th>Category</th><th>Peers</th><th>Median mcap / TVL</th><th>Peer multiple</th>
+  </tr></thead><tbody id="peerrows"></tbody></table></div>
+</section>
+
+<section id="model" class="view hidden">
+  <button class="back">Back to board</button>
+  <h2>Value model</h2>
+  <div id="modelbody"></div>
+</section>
 </main>
-<script src="data.js"></script>
+
+<script src="../data.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

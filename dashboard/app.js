@@ -1,20 +1,569 @@
 (function () {
   'use strict';
-  var d = window.RADAR;
-  if (!d) {
-    var el = document.getElementById('rows');
-    if (el) el.textContent = 'No data loaded: run main.ts first to write data.js.';
+
+  var D = window.RADAR;
+
+  if (!D || !Array.isArray(D.rows) || D.rows.length === 0) {
+    var m = document.querySelector('main');
+    if (m) m.textContent = 'No radar data. Run main.ts first so it writes data.js beside this page.';
     return;
   }
-  var rows = document.getElementById('rows');
-  if (rows) {
-    var html = '<table><tr><th>#</th><th>Protocol</th><th>Category</th><th>TVL</th><th>Implied</th></tr>';
-    for (var i = 0; i < Math.min(20, d.rows.length); i++) {
-      var r = d.rows[i];
-      html += '<tr><td class="num">' + r.rank + '</td><td>' + r.name + '</td><td>' + (r.category || '-') +
-        '</td><td class="num">$' + r.tvl_usd.toLocaleString() + '</td><td class="num">$' +
-        r.implied_value_usd.toLocaleString() + '</td></tr>';
-    }
-    rows.innerHTML = html + '</table>';
+
+  var ROWS = D.rows;
+  var LIVE = Array.isArray(D.live) ? D.live : [];
+  var PEERS = Array.isArray(D.peer_table) ? D.peer_table : [];
+  var WATCH = new Set(Array.isArray(D.watchlist) ? D.watchlist : []);
+  var FLOOR = typeof D.floor_usd === 'number' ? D.floor_usd : 50000000;
+  var BY_SLUG = {};
+  ROWS.forEach(function (r) { BY_SLUG[r.slug] = r; });
+  var PEER_BY_CAT = {};
+  PEERS.forEach(function (p) { PEER_BY_CAT[p.category] = p; });
+
+  var viewEls = {
+    board: document.getElementById('board'),
+    detail: document.getElementById('detail'),
+    live: document.getElementById('live'),
+    peers: document.getElementById('peers'),
+    model: document.getElementById('model')
+  };
+
+  var state = {
+    view: 'board',
+    q: '',
+    category: '',
+    chain: '',
+    sort: 'rank',
+    desc: false,
+    watch: false,
+    slug: null
+  };
+
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   }
+
+  function isNum(n) { return typeof n === 'number' && isFinite(n); }
+
+  function usd(n) {
+    if (!isNum(n)) return '\u2014';
+    var abs = Math.abs(n);
+    if (abs >= 1e12) return '$' + (n / 1e12).toFixed(2) + 'T';
+    if (abs >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+    if (abs >= 1e6) return '$' + (n / 1e6).toFixed(abs >= 1e8 ? 0 : 1) + 'M';
+    if (abs >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+    return '$' + Math.round(n);
+  }
+
+  function usdExact(n) {
+    if (!isNum(n)) return '\u2014';
+    return '$' + Math.round(n).toLocaleString('en-US');
+  }
+
+  function pct(n) {
+    if (!isNum(n)) return '<span class="flat">no 7d</span>';
+    var cls = n > 0 ? 'up' : n < 0 ? 'down' : 'flat';
+    return '<span class="' + cls + '">' + (n > 0 ? '+' : '') + n.toFixed(2) + '%</span>';
+  }
+
+  function age(ageDays, listedAt) {
+    if (isNum(ageDays)) return ageDays + 'd';
+    if (listedAt) return listedAt;
+    return '\u2014';
+  }
+
+
+  function routeFromHash() {
+    var h = '';
+    try { h = location.hash.slice(1); } catch (e) { h = ''; }
+    return h;
+  }
+
+  function applyRoute() {
+    var h = routeFromHash();
+    if (!h && window.ROUTE) h = window.ROUTE;
+    if (!h) return;
+    if (BY_SLUG[h]) { state.slug = h; state.view = 'detail'; return; }
+    if (h === 'live' || h === 'peers' || h === 'model') { state.view = h; return; }
+    if (h.indexOf('category=') === 0) state.category = decodeURIComponent(h.slice(9));
+    else if (h.indexOf('chain=') === 0) state.chain = decodeURIComponent(h.slice(6));
+    else if (h.indexOf('q=') === 0) state.q = decodeURIComponent(h.slice(2));
+    else if (h === 'watch') state.watch = true;
+  }
+
+  function setRoute(h) {
+    try {
+      if (h) history.replaceState(null, '', '#' + h);
+      else history.replaceState(null, '', location.pathname + location.search);
+    } catch (e) { /* file:// can refuse replaceState; the hash is a nicety */ }
+  }
+
+  function filteredRows() {
+    var q = state.q.trim().toLowerCase();
+    var out = ROWS.filter(function (r) {
+      if (state.watch && !WATCH.has(r.slug)) return false;
+      if (state.category && (r.category || '(none)') !== state.category) return false;
+      if (state.chain && (r.chains || []).indexOf(state.chain) === -1) return false;
+      if (q) {
+        var hay = (r.name + ' ' + r.slug + ' ' + (r.category || '')).toLowerCase();
+        if (hay.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+    var key = state.sort;
+    var dir = state.desc ? -1 : 1;
+    out.sort(function (a, b) {
+      var x;
+      var y;
+      if (key === 'tvl') { x = a.tvl_usd; y = b.tvl_usd; }
+      else if (key === 'implied') { x = a.implied_value_usd; y = b.implied_value_usd; }
+      else if (key === 'change') {
+        x = isNum(a.change_7d) ? a.change_7d : -Infinity;
+        y = isNum(b.change_7d) ? b.change_7d : -Infinity;
+      } else { x = a.rank; y = b.rank; }
+      if (x === y) return a.rank - b.rank;
+      return x < y ? -dir : dir;
+    });
+    return out;
+  }
+
+  function chainsHtml(chains) {
+    var list = Array.isArray(chains) ? chains : [];
+    if (list.length === 0) return '<span class="muted">\u2014</span>';
+    var shown = list.slice(0, 2).map(function (c) { return '<span class="chip">' + esc(c) + '</span>'; }).join('');
+    if (list.length > 2) shown += '<span class="muted">+' + (list.length - 2) + '</span>';
+    return shown;
+  }
+
+  function livePeers(category) {
+    return LIVE.filter(function (l) { return l.category === category; });
+  }
+
+  function renderBoard() {
+    var rows = filteredRows();
+    var tbody = el('rows');
+    el('count').textContent = rows.length + ' of ' + ROWS.length + ' pre-token protocols' +
+      (state.watch ? ' \u00b7 watchlist only' : '') +
+      (state.category ? ' \u00b7 ' + state.category : '') +
+      (state.chain ? ' \u00b7 ' + state.chain : '') +
+      (state.q ? ' \u00b7 search "' + state.q + '"' : '');
+    var html = '';
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      html += '<tr class="rowlink" tabindex="0" data-slug="' + esc(r.slug) + '">' +
+        '<td class="rank">' + r.rank + '</td>' +
+        '<td class="name">' + esc(r.name) + (WATCH.has(r.slug) ? ' <span class="pill watch">watchlist</span>' : '') + '</td>' +
+        '<td class="cat">' + esc(r.category || '(none)') + '</td>' +
+        '<td class="chains">' + chainsHtml(r.chains) + '</td>' +
+        '<td>' + usd(r.tvl_usd) + '</td>' +
+        '<td>' + pct(r.change_7d) + '</td>' +
+        '<td>' + age(r.age_days, r.listed_at) + '</td>' +
+        '<td class="implied">' + usd(r.implied_value_usd) + '</td>' +
+        '</tr>';
+    }
+    tbody.innerHTML = html;
+    var sortEl = el('sort');
+    if (sortEl) {
+      var opt = sortEl.options[sortEl.selectedIndex];
+      if (opt) opt.textContent = opt.textContent.replace(/\s[\u25b2\u25bc]$/, '') + sortIcon(state.sort);
+    }
+    setRoute(state.sort === 'rank' && !state.desc && !state.q && !state.category && !state.chain && !state.watch ? '' : 'board');
+  }
+
+  function sortIcon(key) {
+    if (state.sort !== key) return '';
+    return state.desc ? ' \u25bc' : ' \u25b2';
+  }
+
+
+  function peerBox(categoryNote) {
+    var peer = PEER_BY_CAT[categoryNote];
+    var live = livePeers(categoryNote);
+    var html = '<div class="peerbox"><h4>Priced against its category</h4>';
+    if (peer) {
+      var note = peer.peers > 0
+        ? 'median ' + peer.catMedian.toFixed(4) + ' over ' + peer.peers + ' peer' + (peer.peers === 1 ? '' : 's') + ' in the snapshot, shrunk toward the global median'
+        : 'no live peer in the snapshot: it falls back to the global median';
+      html += '<div class="peerrow"><span class="n">' + esc(peer.category) + '</span><span class="m">' + peer.multiple.toFixed(4) + 'x</span></div>';
+      html += '<p class="muted" style="margin:6px 0 0;font-size:12px">' + esc(note) + '</p>';
+    } else {
+      html += '<p class="muted" style="margin:0;font-size:12px">No peer in the table for this category: the model uses the global median.</p>';
+    }
+    if (live.length) {
+      html += '<h4 style="margin-top:14px">Live tokens in this category</h4>';
+      live.slice(0, 6).forEach(function (l) {
+        var mult = isNum(l.mcap_usd) && l.tvl_usd > 0 ? l.mcap_usd / l.tvl_usd : null;
+        html += '<div class="peerrow"><span class="n">' + esc(l.name) + '</span><span class="m">' +
+          (isNum(mult) ? mult.toFixed(2) + 'x' : '\u2014') + ' mcap/TVL</span></div>';
+      });
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function renderDetail(slug) {
+    var r = BY_SLUG[slug];
+    if (!r) return;
+    var isWatch = WATCH.has(r.slug);
+    var chains = Array.isArray(r.chains) ? r.chains : [];
+    var base = r.tvl_usd * r.peer_multiple;
+    var html = '';
+
+    html += '<div class="detail-head">';
+    html += '<div><h1 class="detail-title"><span class="rk">#' + r.rank + '</span>' + esc(r.name) +
+      (isWatch ? ' <span class="pill watch">watchlist</span>' : '') + '</h1>';
+    html += '<p class="detail-sub">' + esc(r.category || '(no category)') + ' \u00b7 <span class="slug" style="display:inline">' + esc(r.slug) + '</span> \u00b7 ' +
+      (isWatch ? 'the watchlist names it: no token recorded, TVL at or above the ' + usd(FLOOR) + ' floor'
+               : 'early find: no token recorded, TVL below the ' + usd(FLOOR) + ' floor') + '</p></div>';
+    html += '<div class="bigval"><b>' + usd(r.implied_value_usd) + '</b><span>implied value</span></div>';
+    html += '</div>';
+
+    html += '<div class="dgrid">' +
+      '<div class="dstat"><span>TVL</span><b>' + usd(r.tvl_usd) + '</b></div>' +
+      '<div class="dstat"><span>7d change</span><b>' + pct(r.change_7d) + '</b></div>' +
+      '<div class="dstat"><span>Age, no token</span><b>' + age(r.age_days, r.listed_at) + '</b></div>' +
+      '<div class="dstat"><span>Listed</span><b>' + esc(r.listed_at || '\u2014') + '</b></div>' +
+      '<div class="dstat"><span>Chains</span><b>' + chains.length + '</b></div>' +
+      '<div class="dstat"><span>Peer multiple</span><b>' + r.peer_multiple.toFixed(4) + 'x</b></div>' +
+      '</div>';
+
+    if (chains.length) {
+      html += '<p class="detail-sub">Chains: ' + chains.map(function (c) { return '<span class="chip">' + esc(c) + '</span>'; }).join('') + '</p>';
+    }
+
+    html += '<div class="cols">';
+    html += '<div class="card"><h3>Model breakdown \u2014 <span class="muted" style="font-weight:400">impliedValue()</span></h3>';
+    html += '<div class="formula">implied = round( <b>TVL</b> \u00d7 <b>peer_multiple</b> \u00d7 <b>growth</b> \u00d7 <b>maturity</b> \u00d7 <b>chain</b> )<br>' +
+      usdExact(r.tvl_usd) + ' \u00d7 ' + r.peer_multiple.toFixed(4) + ' \u00d7 ' + r.growth_multiplier.toFixed(4) + ' \u00d7 ' +
+      r.maturity_multiplier.toFixed(4) + ' \u00d7 ' + r.chain_multiplier.toFixed(4) + ' = <b>' + usdExact(r.implied_value_usd) + '</b></div>';
+    html += '<table class="modeltable"><tbody>';
+    html += '<tr><td class="lbl">Peer multiple<br><span class="fn">getPeerMultiple(category)</span></td><td>' + r.peer_multiple.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">Growth multiplier<br><span class="fn">change_7d clamped -60 to +120</span></td><td>' + r.growth_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">Maturity multiplier<br><span class="fn">age in days, capped at 1095</span></td><td>' + r.maturity_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">Chain multiplier<br><span class="fn">1 + 0.04 per extra chain</span></td><td>' + r.chain_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr class="total"><td class="lbl">TVL \u00d7 peer multiple (base)</td><td>' + usdExact(base) + '</td></tr>';
+    html += '</tbody></table>';
+    html += '<p class="muted" style="font-size:12px;margin:10px 0 0">peer_multiple ' + r.peer_multiple.toFixed(4) + ' \u00b7 peer_count ' + r.peer_count +
+      ' \u00b7 7d change ' + (isNum(r.change_7d) ? r.change_7d.toFixed(2) + '%' : 'not reported') + ' \u00b7 age_days ' + (isNum(r.age_days) ? r.age_days : 'not recorded') + '</p>';
+    html += peerBox(r.category);
+    html += '</div>';
+    html += '<div class="card"><h3>Farm steps before a launch</h3><ol class="steps"></ol></div>';
+    html += '</div>';
+    el('detail').innerHTML = html;
+    renderSteps(r);
+  }
+
+
+  function renderSteps(r) {
+    var ol = document.querySelector('#detail ol.steps');
+    if (!ol) return;
+    var steps = Array.isArray(r.farm_steps) ? r.farm_steps : [];
+    var html = '';
+    for (var i = 0; i < steps.length; i++) html += '<li>' + esc(steps[i]) + '</li>';
+    ol.innerHTML = html;
+  }
+
+  function renderLive() {
+    var tbody = el('liverows');
+    var html = '';
+    for (var i = 0; i < LIVE.length; i++) {
+      var l = LIVE[i];
+      var mult = isNum(l.mcap_usd) && l.tvl_usd > 0 ? l.mcap_usd / l.tvl_usd : null;
+      html += '<tr>' +
+        '<td class="name">' + esc(l.name) + '<span class="slug">' + esc(l.slug) + '</span></td>' +
+        '<td class="cat">' + esc(l.category || '(none)') + '</td>' +
+        '<td class="chains">' + chainsHtml(l.chains) + '</td>' +
+        '<td>' + usd(l.tvl_usd) + '</td>' +
+        '<td>' + pct(l.change_7d) + '</td>' +
+        '<td>' + usd(l.mcap_usd) + '</td>' +
+        '<td>' + (isNum(mult) ? mult.toFixed(2) + 'x' : '\u2014') + '</td>' +
+        '</tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
+  function renderPeers() {
+    var tbody = el('peerrows');
+    var html = '';
+    for (var i = 0; i < PEERS.length; i++) {
+      var p = PEERS[i];
+      var width = Math.max(2, Math.min(100, Math.round((p.multiple / 0.5915) * 100)));
+      html += '<tr>' +
+        '<td class="rank">' + (i + 1) + '</td>' +
+        '<td class="name">' + esc(p.category) + '</td>' +
+        '<td>' + p.peers + '</td>' +
+        '<td>' + p.catMedian.toFixed(4) + '</td>' +
+        '<td class="implied"><span class="bar" style="width:' + width + '%"></span>' + p.multiple.toFixed(4) + 'x</td>' +
+        '</tr>';
+    }
+    tbody.innerHTML = html;
+    var sum = el('peersum');
+    if (sum) {
+      sum.textContent = PEERS.length + ' categories are priced from live peers in the snapshot, each median shrunk toward the global one with 3 virtual peers, as computePeerTable() does. A category with no live peer falls back to the global median, so a protocol still gets a claim on any record.';
+    }
+  }
+
+
+  function renderModel() {
+    var body = el('modelbody');
+    if (!body) return;
+    var top = ROWS[0];
+    var last = ROWS[ROWS.length - 1];
+    var topWatch = 0;
+    var topLive = 0;
+    for (var i = 0; i < ROWS.length; i++) {
+      if (WATCH.has(ROWS[i].slug)) topWatch++;
+      if (ROWS[i].tvl_usd >= FLOOR) topLive++;
+    }
+    var html = '';
+    html += '<p class="lead">This page fetches nothing: every figure comes from <code>data.js</code>, which <code>main.ts</code> writes beside it. <code>window.RADAR</code> holds ' + ROWS.length + ' scored rows and ' + LIVE.length + ' live tokens. No protocol is named in the code.</p>';
+    html += '<div class="cols">';
+    html += '<div class="card"><h3>1. The formula \u2014 <span class="muted" style="font-weight:400">impliedValue()</span></h3>';
+    html += '<div class="formula">implied = round( <b>TVL</b> \u00d7 <b>peer_multiple</b>(category) \u00d7 <b>growth</b> \u00d7 <b>maturity</b> \u00d7 <b>chain</b> )</div>';
+    html += '<ol class="steps">';
+    html += '<li><b>peer_multiple</b> asks what token holders already pay for this category: the winsorised median of mcap / TVL over live tokens in the same category, shrunk toward the global median.</li>';
+    html += '<li><b>growth</b> rewards TVL that rose this week and penalises a fall harder: change_7d clamped -60 to +120, scaled 0.4 up and 0.9 down.</li>';
+    html += '<li><b>maturity</b> = 0.65 + min(age, 1095) / 1095 \u00d7 0.35, so a half-year protocol reads lower than a three-year one; unknown age uses 365 days.</li>';
+    html += '<li><b>chain</b> = 1 + 0.04 per extra chain up to 6, for multi-chain reach; 1.00 to 1.20.</li>';
+    html += '</ol></div>';
+    html += '<div class="card"><h3>2. Reading the board</h3>';
+    html += '<p class="lead">Sort by rank, TVL, 7d change or implied value; filter category and chain; search a name or slug. Every row opens a detail view with the full multiplication, the peer it was priced against, and the farm steps the model wrote for it with capital, gas and hold time.</p>';
+    html += '<div class="dgrid">';
+    html += '<div class="dstat"><span>Ranked protocols</span><b>' + ROWS.length + '</b></div>';
+    html += '<div class="dstat"><span>On the watchlist</span><b>' + topWatch + '</b></div>';
+    html += '<div class="dstat"><span>At or above the floor</span><b>' + topLive + '</b></div>';
+    html += '<div class="dstat"><span>Live tokens set aside</span><b>' + LIVE.length + '</b></div>';
+    html += '</div>';
+    html += '<p class="muted" style="font-size:12px;margin:8px 0 0">The watchlist is the floor, never the ceiling: ' + (ROWS.length - topWatch) + ' early protocols below the ' + usd(FLOOR) + ' floor are ranked too, because a launch below the floor is still a launch.</p>';
+    html += '</div>';
+    html += '</div>';
+    body.innerHTML = html;
+  }
+
+  function showView(name) {
+    state.view = name;
+    for (var k in viewEls) {
+      if (Object.prototype.hasOwnProperty.call(viewEls, k)) {
+        var sec = viewEls[k];
+        if (sec) sec.classList.toggle('hidden', k !== name);
+      }
+    }
+    var tabs = document.querySelectorAll('.tab');
+    for (var i = 0; i < tabs.length; i++) {
+      tabs[i].classList.toggle('on', tabs[i].getAttribute('data-view') === name);
+    }
+    try { window.scrollTo(0, 0); } catch (e) { /* no-op */ }
+  }
+
+  function renderStats() {
+    var st = el('stats');
+    if (!st) return;
+    var top = ROWS[0];
+    var watchCount = 0;
+    for (var i = 0; i < ROWS.length; i++) if (WATCH.has(ROWS[i].slug)) watchCount++;
+    var cards = [
+      { k: 'Ranked pre-token protocols', v: String(ROWS.length), cls: '' },
+      { k: 'Top implied value', v: top ? usd(top.implied_value_usd) : '\u2014', s: top ? top.name : '', cls: 'accent' },
+      { k: 'On the watchlist', v: String(watchCount), cls: '' },
+      { k: 'Live tokens set aside', v: String(LIVE.length), cls: '' },
+      { k: 'TVL floor', v: usd(FLOOR), cls: '' }
+    ];
+    var html = '';
+    for (var j = 0; j < cards.length; j++) {
+      html += '<div class="stat ' + cards[j].cls + '"><span>' + esc(cards[j].k) + '</span><b>' + esc(cards[j].v) + '</b>' +
+        (cards[j].s ? '<span class="sub">' + esc(cards[j].s) + '</span>' : '') + '</div>';
+    }
+    st.innerHTML = html;
+  }
+
+  function uniqueValues(list, key) {
+    var set = Object.create(null);
+    for (var i = 0; i < list.length; i++) {
+      var v = key(list[i]);
+      if (v === null || v === undefined || v === '') continue;
+      set[v] = true;
+    }
+    return Object.keys(set).sort();
+  }
+
+  function allChains() {
+    var set = Object.create(null);
+    for (var i = 0; i < ROWS.length; i++) {
+      var list = Array.isArray(ROWS[i].chains) ? ROWS[i].chains : [];
+      for (var j = 0; j < list.length; j++) set[list[j]] = true;
+    }
+    return Object.keys(set).sort();
+  }
+
+  function fillOptions(select, values) {
+    var html = select.getAttribute('data-first') || '';
+    for (var i = 0; i < values.length; i++) {
+      html += '<option value="' + esc(values[i]) + '">' + esc(values[i]) + '</option>';
+    }
+    select.innerHTML = html;
+  }
+
+  function buildControls() {
+    var cats = uniqueValues(ROWS, function (r) { return r.category; });
+    fillOptions(el('category'), cats);
+    fillOptions(el('chain'), allChains());
+  }
+
+
+  function syncControls() {
+    var sortEl = el('sort');
+    if (sortEl && sortEl.value !== state.sort) sortEl.value = state.sort;
+    var catEl = el('category');
+    if (catEl) catEl.value = state.category;
+    var chEl = el('chain');
+    if (chEl) chEl.value = state.chain;
+    var wEl = el('watch');
+    if (wEl) wEl.setAttribute('aria-pressed', state.watch ? 'true' : 'false');
+  }
+
+  function openDetail(slug) {
+    if (!BY_SLUG[slug]) return;
+    state.slug = slug;
+    renderDetail(slug);
+    showView('detail');
+    setRoute(slug);
+  }
+
+  function goBoard() {
+    state.slug = null;
+    showView('board');
+    renderBoard();
+    setRoute('');
+  }
+
+
+  function renderMeta() {
+    var parts = [];
+    if (D.as_of) parts.push('snapshot ' + esc(D.as_of));
+    if (D.model_version) parts.push('model ' + esc(D.model_version));
+    if (typeof D.board_size === 'number') parts.push(D.board_size + ' rows');
+    if (typeof D.live_size === 'number') parts.push(D.live_size + ' live');
+    parts.push('floor ' + usd(FLOOR));
+    el('meta').innerHTML = parts.map(function (p) { return '<span>' + p + '</span>'; }).join('');
+  }
+
+  function bindEvents() {
+    var search = el('search');
+    search.value = state.q;
+    search.addEventListener('input', function () { state.q = search.value; renderBoard(); });
+
+    el('category').addEventListener('change', function () {
+      state.category = this.value;
+      renderBoard();
+      setRoute(state.category ? 'category=' + encodeURIComponent(state.category) : '');
+    });
+    el('chain').addEventListener('change', function () {
+      state.chain = this.value;
+      renderBoard();
+      setRoute(state.chain ? 'chain=' + encodeURIComponent(state.chain) : '');
+    });
+    el('sort').addEventListener('change', function () {
+      var v = this.value;
+      if (v === 'rank') { state.sort = 'rank'; state.desc = false; }
+      else { state.sort = v; state.desc = true; }
+      renderBoard();
+    });
+    el('watch').addEventListener('click', function () {
+      state.watch = !state.watch;
+      syncControls();
+      renderBoard();
+      setRoute(state.watch ? 'watch' : '');
+    });
+    el('reset').addEventListener('click', function () {
+      state.q = '';
+      state.category = '';
+      state.chain = '';
+      state.sort = 'rank';
+      state.desc = false;
+      state.watch = false;
+      search.value = '';
+      syncControls();
+      renderBoard();
+      setRoute('');
+    });
+    el('rows').addEventListener('click', function (e) {
+      var tr = e.target.closest('tr[data-slug]');
+      if (tr) openDetail(tr.getAttribute('data-slug'));
+    });
+    el('rows').addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var tr = e.target.closest('tr[data-slug]');
+      if (tr) { e.preventDefault(); openDetail(tr.getAttribute('data-slug')); }
+    });
+    el('detail').addEventListener('click', function (e) {
+      if (e.target.closest('.back')) goBoard();
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('section .back'), function (b) {
+      b.addEventListener('click', goBoard);
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
+      t.addEventListener('click', function () {
+        var v = t.getAttribute('data-view');
+        if (v === 'board') { goBoard(); return; }
+        state.slug = null;
+        if (v === 'live') renderLive();
+        if (v === 'peers') renderPeers();
+        if (v === 'model') renderModel();
+        showView(v);
+        setRoute(v);
+      });
+    });
+    window.addEventListener('hashchange', function () {
+      var h = routeFromHash();
+      state.q = '';
+      state.category = '';
+      state.chain = '';
+      state.watch = false;
+      state.slug = null;
+      state.view = 'board';
+      applyRoute();
+      search.value = state.q;
+      syncControls();
+      if (state.slug) { renderDetail(state.slug); showView('detail'); }
+      else if (state.view === 'live' || state.view === 'peers' || state.view === 'model') {
+        if (state.view === 'live') renderLive();
+        if (state.view === 'peers') renderPeers();
+        if (state.view === 'model') renderModel();
+        showView(state.view);
+        setRoute(h);
+      } else { showView('board'); renderBoard(); }
+    });
+  }
+
+  function init() {
+    renderMeta();
+    renderStats();
+    buildControls();
+    applyRoute();
+    syncControls();
+    el('search').value = state.q;
+    bindEvents();
+    if (state.view === 'detail' && state.slug) {
+      renderDetail(state.slug);
+      showView('detail');
+    } else {
+      renderBoard();
+      if (state.view === 'live') { renderLive(); showView('live'); }
+      else if (state.view === 'peers') { renderPeers(); showView('peers'); }
+      else if (state.view === 'model') { renderModel(); showView('model'); }
+      else showView('board');
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+
 })();

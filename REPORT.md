@@ -229,3 +229,157 @@ Phase 1 chỉ cần placeholder chạy trọn vòng; gate pass nhưng **nội du
 
 Repo hiện **chưa có commit nào** (`main` unborn); mọi file còn untracked. Chưa
 `commit`/`push` gì — chờ điều phối viên duyệt (đúng brief).
+
+> Cập nhật 17/11: Phase 1 đã được điều phối viên duyệt và push thành commit
+> `30273f1` (branch `main`, remote `gh443`). Phase 2 chưa commit — chờ duyệt.
+
+## 6. Phase 2 — dashboard thật, 3 ảnh thật, README/LICENSE, gate (17/11)
+
+Mọi số dưới đây đo trực tiếp từ file trong repo sau khi chạy lại `main.ts`.
+**Không sửa `main.ts`; `lib/model.ts` chỉ thêm đúng 4 dòng** (đưa
+`farm_steps` vào `RadarRow` + khoá `watchlist` — xem 6.4, 6.6), **không đổi
+công thức, không đổi số liệu** — số implied giữ nguyên (Steakhouse vẫn
+**1,094,803,096**; `out/board.json` so với commit `30273f1` trùng byte).
+
+### 6.1. Dashboard mới (`dashboard/`) thay placeholder Phase 1
+
+Một trang tĩnh dark, 5 view, dữ liệu 100% từ `data.js` (`window.RADAR`),
+không fetch, không URL `http(s)` nào trong source:
+
+- **Board** — bảng 226 dòng (rank, name + pill "watchlist", category, chips
+  chain, TVL, 7d, age, implied); sort rank/TVL/implied/7d (đảo chiều được),
+  filter 34 category + filter chain, search name/slug, toggle "Watchlist 40
+  only", Reset. Mỗi dòng mở bằng click hoặc Enter.
+- **Detail** (`#slug`) — model breakdown đầy đủ: công thức
+  `implied = round(TVL × peer_multiple × growth × maturity × chain)` với số
+  thật của chính dòng đó (Steakhouse: `$2,753,981,495 × 0.4104 × 0.9803 ×
+  0.8236 × 1.2000 = $1,094,803,096` — khớp §3 Phase 1), bảng 4 multiplier,
+  box "Priced against its category" (median peer của category + live tokens
+  cùng category), farm steps.
+- **Live tokens** — 24 token đã có mcap/TVL, để so sánh, không xếp hạng.
+- **Peer multiples** — bảng 34 category kèm bar `multiple`.
+- **Value model** — công thức + cách đọc board.
+
+Routing bằng hash: `#slug`, `#live`, `#peers`, `#model`, `#category=…`,
+`#chain=…`, `#q=…`, `#watch`.
+
+Kiểm render (Playwright chromium-1243, viewport 1440×800, `colorScheme:
+dark`): **0 console/page error** trên cả 3 view được chụp; board in "226 of
+226 pre-token protocols", top $1.09B Steakhouse Financial, stats "On the
+watchlist 40"; view lọc `#category=Risk%20Curators` in "33 of 226 pre-token
+protocols · Risk Curators" và 33/33 dòng cùng category; detail hiển thị đúng
+công thức và số liệu thật.
+
+### 6.2. Kích thước source dashboard
+
+| file | Phase 1 (placeholder) | Phase 2 |
+|------|----------------------:|--------:|
+| `index.html` | — | 3,362 B |
+| `app.css` | — | 8,643 B |
+| `app.js` | — | 23,982 B |
+| **Tổng (3 files)** | **2,350 B** | **35,987 B** |
+
+Cách xa cap 4 MiB của dossier; gate `dashboard_files` PASS.
+
+### 6.3. Ba ảnh chụp thật (thay ảnh synthetic 2 màu của Phase 1)
+
+Chụp bằng `node tools/shoot.mjs` (Playwright chromium-1243 headless, viewport
+1440×800, dark) từ `out/dashboard/` đang chạy trên `out/data.js` thật:
+
+| ảnh | nội dung | kích thước | dung lượng |
+|-----|----------|-----------|-----------:|
+| `screenshots/1-board.png` | toàn board: 226 dòng, stats 40 watchlist, top $1.09B | 1440×800 | **147,243 B** (143.8 KiB) |
+| `screenshots/2-detail.png` | detail Steakhouse Financial: công thức, 4 multiplier, peer box, đủ 7 farm steps | 1440×800 | **210,147 B** (205.2 KiB) |
+| `screenshots/3-filtered.png` | board lọc Risk Curators: đủ tiêu đề + stats, 33/33 dòng | 1440×800 | **175,744 B** (171.6 KiB) |
+
+Bảng trên là 3 ảnh **chụp lại ngày 17/11 ~12:22**, sau khi sửa lỗi
+`farm_steps` (mục 6.6) và thêm scroll về đầu trang trong `tools/shoot.mjs`;
+`1-board.png` giữ nguyên dung lượng 147,243 B.
+
+Tất cả ≤ 512 KiB, đúng ràng buộc của scorer (long side ≤ 1440, short side ≥
+800). Kiểm "bằng mắt" thay bằng đo (model phiên này không nhận ảnh):
+- DOM text render ra đúng chữ và số liệu thật (mục 6.1).
+- Phân tích pixel PNG: ảnh mới có **3,271–4,421 màu RGB khác nhau**, ảnh
+  synthetic cũ chỉ **2 màu** → chắc chắn là UI render thật, không phải khung
+  màu đặc.
+- `shoot.mjs` có 2 chỉnh sửa so với bản đầu Phase 2: (1)
+  `deviceScaleFactor: 2` → `1` — với 2, ảnh ra 2880×1600 vi phạm "long side
+  ≤ 1440", brief cho phép hạ về 1 khi cần; (2) **scroll về đầu trang trước
+  khi chụp** — thêm khi chụp lại 17/11 ~12:22 để ảnh 3 hiện đủ tiêu đề +
+  stats. Ảnh 1440×800 thật ra nhẹ (144–205 KiB) vì nền dark ít chi tiết,
+  vẫn dưới cap 512 KiB và gấp ~10 lần ảnh synthetic cũ.
+
+### 6.4. Thay đổi trong `out/data.js` so với Phase 1
+
+So `window.RADAR` của `out/data.js` mới với bản trong commit `30273f1` (parse
+và so từng khoá):
+
+- `out/board.json`: **trùng byte** với Phase 1 (226 dòng, mọi implied giữ
+  nguyên).
+- `out/data.js`: các khoá Phase 1 (`as_of, board_size, early_size,
+  floor_usd, live, live_size, model_version, peer_table, source,
+  watchlist_size`) **trùng khớp**; thêm khoá **`watchlist`** = mảng 40 slug,
+  trùng `snapshot.watchlist` (dashboard cần để hiện số 40 ở stats, pill và
+  toggle); và mỗi dòng trong `rows` thêm trường **`farm_steps`** (226 dòng →
+  226 lần `farm_steps` trong file) — do sửa lỗi ở mục 6.6. Mọi số implied,
+  multiplier trong `rows` giữ nguyên.
+
+### 6.5. Gate + determinism (trạng thái cuối, sau khi đổi ảnh)
+
+`node main.ts --input ../kit/token-radar-01-kit/input/snapshot.json --output
+out` rồi `node tools/check-gate.mjs out ../kit/token-radar-01-kit/input/snapshot.json`:
+
+```
+PASS  dashboard_files - 3 files, 35987 bytes
+PASS  board_file - 226 rows, valid slugs
+PASS  sorted_by_value - ranks 1..226, 226 distinct implied values
+PASS  coverage - all 40 watchlist slugs present
+PASS  farm_steps - all 226 rows have 3-12 steps of 20-600 chars
+PASS  screenshots - 3 images OK
+PASS  dossier_matches - 748801 bytes, byte-identical
+PASS  dossier_text_cap - 36253 bytes of text
+
+8/8 gate checks passed
+```
+
+Bản gate in trên là lần chạy cuối: sau khi sửa `farm_steps` (6.6) và chụp
+lại 3 ảnh (17/11 ~12:22); dossier **748,801 B**, byte-identical.
+
+- **Determinism**: chạy thêm lần 2 vào `out2/`, so 5 artefact
+  (`board.json`, `data.js`, `dossier.json` + 3 PNG) → **trùng byte cả 2 lần**
+  (lần 1 trước khi đổi ảnh, lần 2 sau khi đổi ảnh); `out2/` đã xoá (nằm trong
+  `.gitignore`).
+- **README.md** (mới, gốc repo): 3 badge live của make.fun theo RULES.txt —
+  `https://make.fun/badge/token-radar-01.svg`,
+  `https://make.fun/badge/token-radar-01/ratrichero/token-launch-radar/rank.svg`,
+  `.../reward.svg` — không còn placeholder `{owner}`, kèm link trang
+  competition `https://make.fun/c/token-radar-01/`, mô tả ngắn, cách chạy.
+- **LICENSE** (mới): MIT, copy nguyên chữ từ `kit/starter/LICENSE`
+  ("Copyright (c) 2026 the make.fun team").
+- **No secrets**: không file mới nào chứa key/secret; không đọc/ghi
+  `wallet.json`.
+
+### 6.6. Lỗi `farm_steps` trống trong panel detail — phát hiện 17/11, đã sửa
+
+- **Phát hiện**: sau bản chụp đầu, điều phối viên mở ảnh kiểm bằng mắt và
+  thấy panel detail **không hiện phần farm steps** của Steakhouse, dù công
+  thức, 4 multiplier và peer box đều đủ.
+- **Nguyên nhân**: hàm `radarRow` trong `lib/model.ts` không đưa trường
+  `farm_steps` vào `RadarRow`, nên `rows` trong `out/data.js` (nguồn dữ
+  liệu duy nhất của dashboard) thiếu `farm_steps` ở cả 226 dòng.
+  `out/board.json` không bị ảnh hưởng (vẫn đủ 226 `farm_steps`) và gate
+  `farm_steps` đọc `board.json` nên đã pass từ Phase 1 — lỗ hổng chỉ lộ
+  khi xem panel detail trong ảnh.
+- **Cách sửa**: thêm đúng **4 dòng** vào `lib/model.ts`: 2 dòng đưa
+  `farm_steps` vào `RadarRow` (interface + gán `row.farm_steps` trong
+  `radarRow`), 2 dòng còn lại là khoá `watchlist` (đã ghi ở 6.4). **Không
+  đổi công thức, không đổi số liệu**, không sửa `main.ts`.
+- **Kiểm chứng**:
+  - `out/data.js`: **226 lần** `farm_steps` (đủ 226 dòng).
+  - `out/board.json`: **trùng byte** với commit `30273f1` (md5
+    `0c92f684…`, `git diff` trống) → mọi implied giữ nguyên (Steakhouse
+    vẫn **1,094,803,096**).
+  - Gate chạy lại: **8/8 PASS**.
+  - 3 ảnh **chụp lại 17/11 ~12:22** (bảng 6.3): `2-detail.png` hiện đủ
+    **7 farm steps** của Steakhouse; `3-filtered.png` hiện đủ tiêu đề +
+    stats (33/33 Risk Curators); `1-board.png` không đổi.
