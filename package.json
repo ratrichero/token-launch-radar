@@ -1,0 +1,25 @@
+{
+  "name": "token-launch-radar",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:browser": "node tools/browser-smoke.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ratrichero/token-launch-radar.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ratrichero/token-launch-radar/issues"
+  },
+  "homepage": "https://github.com/ratrichero/token-launch-radar#readme",
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "devDependencies": {
+    "playwright": "1.65.1"
+  },
+  "type": "module"
+}

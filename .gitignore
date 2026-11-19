@@ -1,1 +1,6 @@
 out2/
+
+node_modules/
+/demo-out/
+/demo-snapshot.json
+/radar-build/

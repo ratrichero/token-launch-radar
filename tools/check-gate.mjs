@@ -1,10 +1,9 @@
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { createHash } from 'node:crypto';
 
 const outDir = process.argv[2];
 if (!outDir) {
-  console.error('usage: node tools/check-gate.mjs <outDir> [snapshotPath]');
+  console.error('usage: node tools/check-gate.mjs <outDir> <snapshotPath>');
   process.exit(1);
 }
 const snapPath = process.argv[3];
@@ -51,8 +50,8 @@ check('dashboard_files', dashOk, dashDetail || `${dashFiles.length} files, ${tot
 
 const boardRaw = JSON.parse(readFileSync(join(outDir, 'board.json'), 'utf8'));
 const rows = boardRaw.rows ?? boardRaw;
-let boardOk = true;
-let boardDetail = '';
+let boardOk = new Set(rows.map((r) => r.slug)).size === rows.length;
+let boardDetail = boardOk ? '' : 'duplicate board slugs';
 if (rows.length < 100 || rows.length > 4000) { boardOk = false; boardDetail = `rows ${rows.length} outside 100-4000`; }
 for (const r of rows) {
   if (!slugs.has(r.slug)) { boardOk = false; boardDetail = `unknown slug ${r.slug}`; break; }
@@ -79,7 +78,8 @@ const distinct = new Set(rows.map((r) => r.implied_value_usd)).size;
 if (rows.length >= 2 && distinct === 1) { rankOk = false; rankDetail = 'all rows same implied value'; }
 check('sorted_by_value', rankOk, rankDetail || `ranks 1..${rows.length}, ${distinct} distinct implied values`);
 
-const missing = [...watchSet].filter((s) => !new Set(rows.map((r) => r.slug)).has(s));
+const boardSlugs = new Set(rows.map((r) => r.slug));
+const missing = [...watchSet].filter((s) => !boardSlugs.has(s));
 check('coverage', missing.length === 0, missing.length === 0 ? `all ${watchSet.size} watchlist slugs present` : `missing: ${missing.slice(0, 5).join(', ')}`);
 
 let farmOk = true;
@@ -111,7 +111,7 @@ for (const n of shots) {
 }
 check('screenshots', shotOk, shotDetail || `${shots.length} images OK`);
 
-const { buildDossier } = await import(join(process.cwd(), 'vendor/makefun-board.ts'));
+const { buildDossier } = await import('../vendor/makefun-board.ts');
 const expected = buildDossier(outDir, { text_max_bytes: 65_536, screenshots: { max: 4, max_bytes: 524_288 }, dashboard: { max_files: 400, max_bytes: 4 * 1024 * 1024 } });
 const actual = readFileSync(join(outDir, 'dossier.json'));
 const match = Buffer.compare(Buffer.from(expected), actual) === 0;

@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
-const b = JSON.parse(readFileSync('out/board.json', 'utf8'));
+import { join } from 'node:path';
+const out = process.argv[2] ?? 'out';
+const b = JSON.parse(readFileSync(join(out, 'board.json'), 'utf8'));
 console.log('rows:', b.rows.length);
 for (const r of b.rows.slice(0, 10)) {
   console.log(
@@ -13,7 +15,7 @@ for (const r of b.rows.slice(0, 10)) {
 }
 const last = b.rows[b.rows.length - 1];
 console.log('last row:', last.slug, 'implied=', last.implied_value_usd);
-const snap = JSON.parse(readFileSync('/home/hatch/workspace/makefun-token-radar/kit/token-radar-01-kit/input/snapshot.json', 'utf8'));
-const wl = new Set(snap.watchlist);
+const data = readFileSync(join(out, 'data.js'), 'utf8').trim();
+const wl = new Set(JSON.parse(data.replace(/^window\.RADAR=/, '').replace(/;$/, '')).watchlist);
 console.log('watchlist in top40:', b.rows.slice(0, 40).filter((r) => wl.has(r.slug)).length);
 console.log('farm steps sample (row 1):', JSON.stringify(b.rows[0].farm_steps, null, 1));

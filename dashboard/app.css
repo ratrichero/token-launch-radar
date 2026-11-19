@@ -85,8 +85,6 @@ tbody td.name{font-family:inherit;text-align:left;white-space:normal}
 tbody td.cat{font-family:inherit;text-align:left;color:var(--mut);white-space:normal;max-width:220px}
 tbody td.chains{font-family:inherit;text-align:left;color:var(--dim);white-space:normal;max-width:260px}
 tbody tr:last-child td{border-bottom:0}
-tbody tr.rowlink{cursor:pointer}
-tbody tr.rowlink:hover td{background:#17202c}
 
 .rank{color:var(--dim)}
 .cellname{font-weight:600}
@@ -183,3 +181,24 @@ pre.block{background:#10151d;border:1px solid var(--edge);border-radius:8px;padd
 pre.block b{color:var(--fg)}
 kbd{font-family:var(--num);font-size:11px;background:#1b2331;border:1px solid var(--edge2);border-radius:5px;padding:1px 6px;color:var(--fg)}
 .muted{color:var(--dim)}
+
+.protocol-link,.board-link{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+:where(a,button):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.detail-title:focus{outline:2px solid var(--accent);outline-offset:4px}
+.board-link{display:inline-block;margin-bottom:10px}
+.exact summary{margin-top:12px;cursor:pointer;color:var(--accent)}
+.sensitivity{margin-top:14px}
+#boardtable td.empty{text-align:center;padding:20px}
+@media (max-width:600px){
+  header,main{padding-left:14px;padding-right:14px}
+  .tabs{flex-wrap:wrap}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .controls input[type=search]{min-width:0;flex-basis:100%}
+  #boardtable :is(th,td):nth-child(n+3):nth-child(-n+7){display:none}
+  #boardtable :is(th,td){padding-left:6px;padding-right:6px}
+  #boardtable .name{white-space:normal;overflow-wrap:anywhere}
+  #boardtable .pill{display:table;margin:4px 0 0}
+  .detail-head{flex-wrap:wrap}
+  .detail-title,.detail-sub{overflow-wrap:anywhere}
+  .dgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

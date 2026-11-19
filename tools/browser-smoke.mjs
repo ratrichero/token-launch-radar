@@ -1,0 +1,87 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { chromium } from 'playwright';
+import { fixture } from '../tests/fixture.mjs';
+
+const cwd = fileURLToPath(new URL('..', import.meta.url));
+const temp = mkdtempSync(join(tmpdir(), 'radar-browser-'));
+let browser;
+try {
+  const build = (name, input) => {
+    const snapshot = join(temp, `${name}.json`);
+    const output = join(temp, name);
+    writeFileSync(snapshot, JSON.stringify(input));
+    execFileSync(process.execPath, ['main.ts', '--input', snapshot, '--output', output], { cwd });
+    return pathToFileURL(join(output, 'dashboard', 'index.html')).href;
+  };
+  const app = build('demo', fixture());
+  const noPeers = fixture();
+  noPeers.protocols = noPeers.protocols.filter((p) => p.mcap_usd === null);
+  const noPeersApp = build('no-peers', noPeers);
+  browser = await chromium.launch({ executablePath: process.env.CHROME });
+  for (const width of [1440, 390]) {
+    const page = await browser.newPage({ viewport: { width, height: 800 } });
+    const errors = [];
+    const network = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('request', (request) => { if (/^https?:/.test(request.url())) network.push(request.url()); });
+    await page.goto(app + '#category=Lending');
+    await page.locator('#board:not(.hidden)').waitFor();
+    await page.locator('#search').fill('Atlas');
+    await page.locator('#chain').selectOption('Base');
+    await page.locator('#sort').selectOption('tvl');
+    await page.locator('#watch').click();
+    const share = page.url();
+    await page.reload();
+    assert.equal(await page.locator('#category').inputValue(), 'Lending');
+    assert.equal(await page.locator('#search').inputValue(), 'Atlas');
+    assert.equal(await page.locator('#chain').inputValue(), 'Base');
+    assert.equal(await page.locator('#sort').inputValue(), 'tvl');
+    assert.equal(await page.locator('#watch').getAttribute('aria-pressed'), 'true');
+    const link = page.getByRole('link', { name: 'Atlas Lending' });
+    assert.equal(await link.count(), 1);
+    const layout = await page.evaluate(() => {
+      const html = document.documentElement;
+      const table = document.querySelector('#board .tablewrap');
+      return [html.scrollWidth <= html.clientWidth, table.scrollWidth <= table.clientWidth];
+    });
+    assert.deepEqual(layout, [true, true], 'page and board fit viewport without horizontal scroll');
+    await link.focus();
+    await page.keyboard.press('Enter');
+    await page.locator('#detail:not(.hidden)').waitFor();
+    assert.ok(await page.locator('.detail-title').evaluate((heading) => heading === document.activeElement));
+    assert.match(await page.locator('#detail .formula').textContent(), /≈/);
+    await page.getByText('Copyable calculation with full precision').click();
+    assert.match(await page.locator('#detail pre').textContent(), /Math\.max\(1, Math\.round/);
+    assert.match(await page.locator('#detail .steps li').first().textContent(), /does not verify/);
+    await page.goBack();
+    await page.locator('#board:not(.hidden)').waitFor();
+    assert.equal(page.url(), share);
+    assert.ok(await link.evaluate((a) => a === document.activeElement));
+    await page.getByRole('button', { name: 'Value model' }).click();
+    await page.locator('#model:not(.hidden) .sensitivity').waitFor();
+    assert.equal(await page.locator('.sensitivity tbody tr').count(), 10);
+    await page.reload();
+    await page.locator('#model:not(.hidden)').waitFor();
+    await page.goto(noPeersApp + '#protocol=atlas');
+    assert.match(await page.locator('.peermid').textContent(), /assumed floor/);
+    await page.goto(app + '#category=%ZZ');
+    assert.match(await page.locator('#count').textContent(), /^101 of/);
+    await page.locator('#search').fill('No matching protocol');
+    assert.match(await page.locator('#count').textContent(), /^0 of/);
+    await page.getByRole('button', { name: 'Reset' }).click();
+    assert.equal(await page.locator('.protocol-link').count(), 101);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(network, []);
+    await page.close();
+    console.log(`PASS Chromium offline dashboard at ${width}px`);
+  }
+} finally {
+  await browser?.close();
+  rmSync(temp, { recursive: true, force: true });
+}

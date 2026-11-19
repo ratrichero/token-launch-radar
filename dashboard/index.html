@@ -37,19 +37,19 @@
     <div class="top10" id="top10"></div>
   </div>
   <div class="controls">
-    <input id="search" type="search" placeholder="Search name or slug…" autocomplete="off">
-    <select id="category"><option value="">All categories</option></select>
-    <select id="chain"><option value="">All chains</option></select>
-    <select id="sort">
+    <input id="search" aria-label="Search protocols" type="search" placeholder="Search name or slug…" autocomplete="off">
+    <select id="category" aria-label="Category"><option value="">All categories</option></select>
+    <select id="chain" aria-label="Chain"><option value="">All chains</option></select>
+    <select id="sort" aria-label="Sort protocols">
       <option value="rank">Sort: implied rank</option>
       <option value="tvl">Sort: TVL</option>
       <option value="implied">Sort: implied value</option>
       <option value="change">Sort: 7d change</option>
     </select>
-    <button id="watch" class="toggle" aria-pressed="false">Watchlist 40 only</button>
+    <button id="watch" class="toggle" aria-pressed="false">Watchlist only</button>
     <button id="reset" class="ghost">Reset</button>
   </div>
-  <div class="line" id="count"></div>
+  <div class="line" id="count" role="status"></div>
   <div class="tablewrap">
     <table id="boardtable">
       <thead><tr>
@@ -59,7 +59,7 @@
       <tbody id="rows"></tbody>
     </table>
   </div>
-  <p class="foot">Click a row for the full model breakdown, the peer it was priced against, and its farm steps.</p>
+  <p class="foot">Open a protocol for the full model breakdown, the peer it was priced against, and its farm steps.</p>
 </section>
 
 <section id="detail" class="view hidden"></section>
@@ -67,7 +67,7 @@
 <section id="live" class="view hidden">
   <button class="back">Back to board</button>
   <h2>Live tokens <span>set aside for comparison, never ranked on the board</span></h2>
-  <p class="lead">These protocols record a token and a market capital, so they are not launches to catch. Their implied value, if the board's model priced them the same way, is what a reader would compare a farm against today.</p>
+  <p class="lead">These protocols record a token and a market capital, so they are not launches to catch. This comparison shows observed market cap, not model-implied value. The list shows up to 24 protocols; the valuation can use more peers.</p>
   <div class="tablewrap"><table id="livetable"><thead><tr>
     <th>Protocol</th><th>Category</th><th>Chains</th><th>TVL</th><th>7d</th><th>Market cap</th><th>mcap / TVL</th>
   </tr></thead><tbody id="liverows"></tbody></table></div>

@@ -19,7 +19,7 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 const DAY_MS = 86_400_000;
 const MAX_AGE_DAYS = 1095;
@@ -89,7 +89,7 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
-  category_median: number;
+  category_median: number | null;
   farm_steps: string[];
 }
 
@@ -112,7 +112,8 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
-  global_median: number;
+  global_median: number | null;
+  global_peer_count: number;
   peer_table: PeerStats[];
   rows: RadarRow[];
   live: LiveRow[];
@@ -145,12 +146,12 @@ function medianSorted(values: number[]): number {
   return (values[mid - 1]! + values[mid]!) / 2;
 }
 
-export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number; byCategory: Map<string, number>; peerCounts: Map<string, number>; catMedians: Map<string, number> } {
+export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number | null; byCategory: Map<string, number>; peerCounts: Map<string, number>; catMedians: Map<string, number> } {
   const ratios: number[] = [];
   const byCat = new Map<string, number[]>();
   for (const p of snapshot.protocols) {
-    if (p.mcap_usd === null || p.gecko_id === null || p.symbol === null) continue;
-    if (p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
+    if (tokenStatus(p) !== 'live' || p.category === 'CEX') continue;
+    if (p.mcap_usd === null || p.tvl_usd <= 0) continue;
     const r = p.mcap_usd / p.tvl_usd;
     const w = Math.min(PEER_WINSOR_HI, Math.max(PEER_WINSOR_LO, r));
     ratios.push(w);
@@ -163,7 +164,7 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
     arr.push(w);
   }
   ratios.sort((a, b) => a - b);
-  const globalMedian = medianSorted(ratios);
+  const globalMedian = ratios.length ? medianSorted(ratios) : null;
   const table: PeerStats[] = [];
   const multMap = new Map<string, number>();
   const peerCounts = new Map<string, number>();
@@ -172,7 +173,7 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
     arr.sort((a, b) => a - b);
     const catMed = medianSorted(arr);
     const n = arr.length;
-    const shrunk = (n * catMed + SHRINKAGE_GLOBAL_WEIGHT * globalMedian) / (n + SHRINKAGE_GLOBAL_WEIGHT);
+    const shrunk = (n * catMed + SHRINKAGE_GLOBAL_WEIGHT * (globalMedian ?? catMed)) / (n + SHRINKAGE_GLOBAL_WEIGHT);
     const clamped = Math.min(MULTIPLE_CLAMP_HI, Math.max(MULTIPLE_CLAMP_LO, shrunk));
     table.push({ category: cat, peers: n, catMedian: round4(catMed), multiple: round4(clamped) });
     multMap.set(cat, clamped);
@@ -188,13 +189,13 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
 function getPeerMultiple(
   category: string | null,
   byCategory: Map<string, number>,
-  globalMedian: number,
+  globalMedian: number | null,
   peerCounts: Map<string, number>,
 ): { multiple: number; peers: number } {
   const key = category ?? '(no category)';
   const m = byCategory.get(key);
   if (m !== undefined) return { multiple: m, peers: peerCounts.get(key) ?? 0 };
-  const shrunk = (SHRINKAGE_GLOBAL_WEIGHT * globalMedian) / SHRINKAGE_GLOBAL_WEIGHT;
+  const shrunk = globalMedian ?? MULTIPLE_CLAMP_LO;
   const clamped = Math.min(MULTIPLE_CLAMP_HI, Math.max(MULTIPLE_CLAMP_LO, shrunk));
   return { multiple: clamped, peers: 0 };
 }
@@ -204,10 +205,15 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
-const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
+
+export function tokenStatus(p: SnapshotProtocol): 'pre-token' | 'live' | 'unknown' {
+  if (p.mcap_usd === null && p.gecko_id === null && p.symbol === null) return 'pre-token';
+  if (p.mcap_usd !== null && p.mcap_usd > 0 && p.gecko_id && p.symbol) return 'live';
+  return 'unknown';
+}
 
 export function isPreToken(p: SnapshotProtocol): boolean {
-  return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
+  return tokenStatus(p) === 'pre-token';
 }
 
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
@@ -236,7 +242,7 @@ export function impliedValue(
   const chainMult = 1 + CHAIN_BONUS * extraChains;
   const base = p.tvl_usd * peerMultiple;
   const implied = Math.max(1, Math.round(base * growthMult * maturityMult * chainMult));
-  return { implied, growthPct, growthMult: round4(growthMult), maturityMult: round4(maturityMult), chainMult: round4(chainMult), age };
+  return { implied, growthPct, growthMult, maturityMult, chainMult, age };
 }
 
 function capitalFor(tvl: number): number {
@@ -246,151 +252,31 @@ function capitalFor(tvl: number): number {
   return 50;
 }
 
-function holdDaysFor(age: number | null): number {
-  if (age === null) return 30;
-  if (age < 180) return 60;
-  if (age < 365) return 45;
-  return 30;
-}
+const LEND_KIT = "Verify which assets can be supplied; start by reviewing a supply quote without borrowing";
+const CDP_KIT = "Check accepted collateral and liquidation thresholds; review a quote without opening debt";
+const STAKE_KIT = "Stake a small amount of the underlying asset through the protocol and hold the staked position";
+const DERIV_KIT = "Review margin, leverage and liquidation rules; prefer a testnet or simulation";
+const PRED_KIT = "Review an active market and its resolution rules without placing a position";
+const DEX_KIT = "Provide a small amount of the main pair as liquidity to the protocol and keep the pool position";
+const VAULT_KIT = "Deposit a small amount into the protocol's vault and keep the position";
+const STABLE_KIT = "Mint or deposit a small amount of the stable asset through the protocol and hold it";
+const RWA_KIT = "Mint a small amount of the protocol's tokenized asset and hold it";
+const PAY_KIT = "Keep a small amount on the protocol and run one small payment through it";
+const INS_KIT = "Buy a small amount of cover from the protocol and keep the policy active";
+const INDEX_KIT = "Mint a small amount of the index token via the protocol and hold the position";
+const GOV_KIT = "Read a recent proposal and check voting eligibility without buying voting power";
+const LOCK_KIT = "Review supported assets and the vesting schedule before creating a lock";
+const MARKET_KIT = "Preview a trade and verify the listed asset and total fees";
+const LAUNCH_KIT = "Review participation rules and lockups without committing funds";
+const AI_KIT = "Use the protocol's main service with a small amount and keep the account funded";
+const PRIV_KIT = "Hold a small amount of a major asset in the protocol and keep the position";
+const CHAIN_KIT = "Review the network explorer and try a basic account action on a testnet if available";
+const GENERIC_KIT = "Use the protocol's main product with a small amount";
 
-function gasEstimate(chain: string, capital: number): string {
-  const c = chain.toLowerCase();
-  if (c.includes('ethereum') || c.includes('eth')) return `$${capital >= 150 ? 12 : 8}`;
-  if (c.includes('solana')) return 'under $1';
-  if (c.includes('base') || c.includes('arbitrum') || c.includes('optimism') || c.includes('polygon')) return '$1-3';
-  return '$1-3';
-}
-
-interface StepKit {
-  action: (n: string, c: number, ch: string) => string;
-  second: (n: string, c: number, ch: string) => string;
-  weekly: (n: string) => string;
-}
-
-const LEND_KIT: StepKit = {
-  action: (n, c, ch) => `Supply $${c} of a major stablecoin to ${n} on ${ch} and keep the supply open`,
-  second: (n, c, ch) => `Repeat the supply on ${ch}: deposit $${c} of a stablecoin to ${n} there and keep both positions`,
-  weekly: (n) => `Perform one small supply, borrow or repayment on ${n} each week to keep the account active`,
-};
-
-const CDP_KIT: StepKit = {
-  action: (n, c, ch) => `Lock $${c} of a major stablecoin as collateral in ${n} on ${ch} to open a position`,
-  second: (n, c, ch) => `Open a second small CDP position in ${n} on ${ch} with $${c} to show cross-chain usage`,
-  weekly: (n) => `Make one small collateral adjustment in ${n} each week to keep the position active`,
-};
-
-const STAKE_KIT: StepKit = {
-  action: (n, c, ch) => `Stake $${c} of the underlying asset through ${n} on ${ch} and hold the staked position`,
-  second: (n, c, ch) => `Stake $${c} through ${n} on ${ch} as well to diversify chain exposure`,
-  weekly: (n) => `Re-stake or compound rewards through ${n} once a week to keep the position active`,
-};
-
-const DERIV_KIT: StepKit = {
-  action: (n, c, ch) => `Deposit $${c} as margin on ${n} on ${ch} and open one small capped position`,
-  second: (n, c, ch) => `Open one more small capped position on ${n} at ${ch} with $${c}`,
-  weekly: (n) => `Roll or adjust your small position on ${n} once a week to keep the margin active`,
-};
-
-const PRED_KIT: StepKit = {
-  action: (n, c, ch) => `Fund $${c} into ${n} on ${ch} and place one small position on an active outcome`,
-  second: (n, c, ch) => `Place one small position in ${n} on ${ch} as well to show cross-chain usage`,
-  weekly: (n) => `Place one small position on a fresh market in ${n} each week to stay active`,
-};
-
-const DEX_KIT: StepKit = {
-  action: (n, c, ch) => `Provide $${c} of the main pair as liquidity to ${n} on ${ch} and keep the pool position`,
-  second: (n, c, ch) => `Add $${c} of liquidity to ${n}'s main pool on ${ch} to show multi-chain usage`,
-  weekly: (n) => `Swap through ${n} or rebalance your pool position once a week to stay active`,
-};
-
-const VAULT_KIT: StepKit = {
-  action: (n, c, ch) => `Deposit $${c} into ${n}'s vault on ${ch} and keep the position`,
-  second: (n, c, ch) => `Deposit $${c} into ${n}'s vault on ${ch} as well to show multi-chain usage`,
-  weekly: (n) => `Top up or rebalance ${n}'s vault once a week to keep the deposit active`,
-};
-
-const STABLE_KIT: StepKit = {
-  action: (n, c, ch) => `Mint or deposit $${c} of the stable asset through ${n} on ${ch} and hold it`,
-  second: (n, c, ch) => `Mint $${c} of the stable through ${n} on ${ch} as well to show cross-chain usage`,
-  weekly: (n) => `Swap a small amount into or out of the stable through ${n} each week to stay active`,
-};
-
-const RWA_KIT: StepKit = {
-  action: (n, c, ch) => `Mint $${c} of ${n}'s tokenized asset on ${ch} and hold it`,
-  second: (n, c, ch) => `Mint $${c} of the tokenized asset via ${n} on ${ch} as well to show cross-chain usage`,
-  weekly: (n) => `Check the ${n} position and make one small adjustment each week to keep it active`,
-};
-
-const PAY_KIT: StepKit = {
-  action: (n, c, ch) => `Keep $${c} on ${n} on ${ch} and run one small payment through it`,
-  second: (n, c, ch) => `Run one small payment through ${n} on ${ch} as well to show multi-chain usage`,
-  weekly: (n) => `Run one small payment or settlement through ${n} each week to keep the account active`,
-};
-
-const INS_KIT: StepKit = {
-  action: (n, c, ch) => `Buy $${c} of cover from ${n} on ${ch} and keep the policy active`,
-  second: (n, c, ch) => `Keep a second small policy with ${n} on ${ch} to show multi-chain usage`,
-  weekly: (n) => `Check the ${n} policy each week and keep it in force without lapses`,
-};
-
-const INDEX_KIT: StepKit = {
-  action: (n, c, ch) => `Mint $${c} of the index token via ${n} on ${ch} and hold the position`,
-  second: (n, c, ch) => `Mint $${c} of the index token via ${n} on ${ch} as well to show cross-chain usage`,
-  weekly: (n) => `Rebalance or top up the index position via ${n} once a week to stay active`,
-};
-
-const GOV_KIT: StepKit = {
-  action: (n, c, ch) => `Hold $${c} in ${n} on ${ch} and take part in one governance vote`,
-  second: (n, c, ch) => `Use ${n} on ${ch} with $${c} as well, so your participation spans chains`,
-  weekly: (n) => `Cast or delegate one governance vote via ${n} each week to stay active`,
-};
-
-const LOCK_KIT: StepKit = {
-  action: (n, c, ch) => `Lock $${c} worth of an asset in ${n} on ${ch} for a set vesting period`,
-  second: (n, c, ch) => `Place a second small lock in ${n} on ${ch} to show multi-chain usage`,
-  weekly: (n) => `Check the ${n} lock each week and keep the locked position intact until it vests`,
-};
-
-const MARKET_KIT: StepKit = {
-  action: (n, c, ch) => `Buy one listed asset through ${n} on ${ch} for around $${c} and keep it`,
-  second: (n, c, ch) => `Make one small trade through ${n} on ${ch} as well to show multi-chain usage`,
-  weekly: (n) => `Make one small trade through ${n} each week to keep the account active`,
-};
-
-const LAUNCH_KIT: StepKit = {
-  action: (n, c, ch) => `Commit $${c} to ${n} on ${ch} and join its next public round`,
-  second: (n, c, ch) => `Commit $${c} to ${n} on ${ch} as well, tracking its rounds on both chains`,
-  weekly: (n) => `Check ${n}'s next round each week and keep your commitment ready to join`,
-};
-
-const AI_KIT: StepKit = {
-  action: (n, c, ch) => `Use ${n}'s main service on ${ch} with $${c} and keep the account funded`,
-  second: (n, c, ch) => `Use ${n}'s main service on ${ch} with $${c} as well to show multi-chain usage`,
-  weekly: (n) => `Use ${n}'s main service with a small amount once a week to keep the account active`,
-};
-
-const PRIV_KIT: StepKit = {
-  action: (n, c, ch) => `Hold $${c} of a major asset in ${n} on ${ch} and keep the position`,
-  second: (n, c, ch) => `Hold part of the position in ${n} on ${ch} as well to show multi-chain usage`,
-  weekly: (n) => `Make one small adjustment to the ${n} position each week to keep it active`,
-};
-
-const CHAIN_KIT: StepKit = {
-  action: (n, c, ch) => `Keep $${c} in an active ${n} account on ${ch} and run normal transactions through it`,
-  second: (n, c, ch) => `Keep a second ${n} account on ${ch} with $${c} to show multi-chain presence`,
-  weekly: (n) => `Run a couple of normal transactions on ${n} each week to keep the account active`,
-};
-
-const GENERIC_KIT: StepKit = {
-  action: (n, c, ch) => `Use ${n}'s main product on ${ch} with $${c} and keep the position open`,
-  second: (n, c, ch) => `Use ${n}'s main product on ${ch} with $${c} as well to show multi-chain usage`,
-  weekly: (n) => `Perform one qualifying interaction on ${n} each week (deposit, swap or vote) to stay active`,
-};
-
-function kitFor(category: string | null): StepKit {
+function kitFor(category: string | null): string {
   const c = (category ?? '').toLowerCase();
   if (c.includes('bridge')) return GENERIC_KIT;
-  const kits: [RegExp, StepKit][] = [
+  const kits: [RegExp, string][] = [
     [/lending|cede/, LEND_KIT],
     [/cdp/, CDP_KIT],
     [/restak|staking|anchor btc|decentralized btc/, STAKE_KIT],
@@ -415,37 +301,24 @@ function kitFor(category: string | null): StepKit {
   return GENERIC_KIT;
 }
 
-export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
-  const chain = p.chains.length > 0 ? p.chains[0]! : 'its primary chain';
-  const capital = capitalFor(p.tvl_usd);
-  const hold = holdDaysFor(age);
-  const gas = gasEstimate(chain, capital);
-  const kit = kitFor(p.category);
-  const steps: string[] = [];
-  steps.push(`Create a dedicated wallet for farming with only the funds you plan to deploy, keeping the seed phrase stored offline securely`);
-  steps.push(`${kit.action(p.name, capital, chain)}. Expected gas: ${gas}. Setup time: about 15 minutes`);
-  if (p.chains.length >= 2) {
-    const chain2 = p.chains[1]!;
-    steps.push(`${kit.second(p.name, capital, chain2)}. Gas: ${gasEstimate(chain2, capital)}. Time: 15 minutes`);
-  }
-  steps.push(`${kit.weekly(p.name)}. Cost: ~$2 gas weekly`);
-  steps.push(`Hold the position for at least ${hold} days so your activity spans multiple snapshots and qualifies for any future distribution`);
-  steps.push(`Before withdrawing, visit only the protocol's official site to check points or rewards. Never pay a fee to claim and never follow third-party claim links`);
-  steps.push(`Log every transaction, date, wallet address and amount in a personal tracker so you can reproduce or unwind the position later`);
-  return steps.map((s) => {
-    if (s.length > 600) return s.slice(0, 597) + '...';
-    if (s.length < 20) return s + '. Hold and verify on the protocol page.';
-    return s;
-  });
+export function farmSteps(p: SnapshotProtocol): string[] {
+  const chain = p.chains[0];
+  return [
+    `Find ${p.name}'s official docs and check for a published points or rewards program. This snapshot does not verify any program or eligibility; skip paid activity if rewards are your only goal.`,
+    `Verify the official app, supported network${chain ? ` (the snapshot lists ${chain})` : ''}, minimums, live fees, risks and withdrawal or lockup rules before funding anything.`,
+    `Optional product example: ${kitFor(p.category)}. Preview first or use a testnet if offered; a transaction is not needed to use this radar.`,
+    `If you choose to transact after those checks, use a separate wallet, keep your recovery phrase offline and limit your total exposure including fees. A rough budget ceiling to consider is $${capitalFor(p.tvl_usd)}, not a required deposit.`,
+    `Log your transaction, cost and exit plan. Do not repeat transactions, add networks or hold for an assumed snapshot without verified requirements. Never pay an unofficial claim fee.`,
+  ].map((step) => step.length <= 600 ? step : step.slice(0, 597) + '...');
 }
 
-export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number; catMedians: Map<string, number> } {
+export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number | null; catMedians: Map<string, number> } {
   const { table: peerTable, globalMedian, byCategory, peerCounts, catMedians } = computePeerTable(snapshot);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   for (const slug of snapshot.watchlist) {
     const p = index.get(slug);
-    if (p !== undefined) chosen.set(slug, p);
+    if (p !== undefined && isRankable(p)) chosen.set(slug, p);
   }
   const early = snapshot.protocols
     .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
@@ -475,7 +348,7 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: 
     age_days: s.age,
     implied_value_usd: s.implied,
     model: {
-      peer_multiple: round4(s.peerMultiple),
+      peer_multiple: s.peerMultiple,
       peer_count: s.peerCount,
       growth_pct: s.growthPct,
       growth_multiplier: s.growthMult,
@@ -483,14 +356,14 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: 
       chain_multiplier: s.chainMult,
       age_days: s.age,
     },
-    farm_steps: farmSteps(s.p, s.age),
+    farm_steps: farmSteps(s.p),
   }));
   return { board, peerTable, globalMedian, catMedians };
 }
 
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
-    .filter((p) => !isPreToken(p) && p.category !== 'CEX')
+    .filter((p) => tokenStatus(p) === 'live' && p.category !== 'CEX')
     .sort((a, b) => (b.mcap_usd ?? 0) - (a.mcap_usd ?? 0) || b.tvl_usd - a.tvl_usd)
     .slice(0, 24)
     .map((p) => ({
@@ -504,7 +377,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-export function radarRow(row: BoardRow, categoryMedian: number): RadarRow {
+export function radarRow(row: BoardRow, categoryMedian: number | null): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -522,16 +395,16 @@ export function radarRow(row: BoardRow, categoryMedian: number): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
-    category_median: round6(categoryMedian),
+    category_median: categoryMedian,
     farm_steps: row.farm_steps,
   };
 }
 
-export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData; peerTable: PeerStats[]; globalMedian: number } {
+export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData; peerTable: PeerStats[]; globalMedian: number | null } {
   const { board, peerTable, globalMedian, catMedians } = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const earlySize = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
-  const medianFor = (category: string | null): number => {
+  const medianFor = (category: string | null): number | null => {
     const key = category ?? '(no category)';
     const m = catMedians.get(key);
     return m !== undefined ? m : globalMedian;
@@ -545,7 +418,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     board_size: board.length,
     early_size: earlySize,
     live_size: live.length,
-    global_median: round6(globalMedian),
+    global_median: globalMedian,
+    global_peer_count: peerTable.reduce((sum, p) => sum + p.peers, 0),
     peer_table: peerTable,
     rows: board.map((r) => radarRow(r, medianFor(r.category))),
     live,
@@ -553,6 +427,14 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   };
   return { board, radar, peerTable, globalMedian };
 }
+
+function validDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+const validSlug = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(value);
 
 export function parseSnapshot(text: string): Snapshot {
   let raw: unknown;
@@ -563,28 +445,37 @@ export function parseSnapshot(text: string): Snapshot {
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new SnapshotError('snapshot.json is not a JSON object');
   const o = raw as Record<string, unknown>;
-  if (typeof o.as_of !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.as_of)) throw new SnapshotError('snapshot.json has no as_of date');
+  if (!validDate(o.as_of)) throw new SnapshotError('snapshot.json has an invalid as_of date');
   if (typeof o.source !== 'string') throw new SnapshotError('snapshot.json has no source');
   if (typeof o.floor_usd !== 'number' || !Number.isSafeInteger(o.floor_usd) || o.floor_usd <= 0) throw new SnapshotError('snapshot.json has no floor_usd');
   if (!Array.isArray(o.protocols)) throw new SnapshotError('snapshot.json has no protocols array');
-  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => typeof s !== 'string')) throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  if (!Array.isArray(o.watchlist) || o.watchlist.some((s) => !validSlug(s))) throw new SnapshotError('snapshot.json has no watchlist of slugs');
+  if (new Set(o.watchlist).size !== o.watchlist.length) throw new SnapshotError('duplicate watchlist slug');
+  const seen = new Set<string>();
   const protocols = o.protocols.map((v, i) => {
     if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new SnapshotError(`protocol ${i} is not an object`);
     const p = v as Record<string, unknown>;
-    if (typeof p.slug !== 'string' || typeof p.name !== 'string' || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd)) {
+    if (!validSlug(p.slug) || typeof p.name !== 'string' || !p.name.trim() || typeof p.tvl_usd !== 'number' || !Number.isFinite(p.tvl_usd) || p.tvl_usd < 0) {
       throw new SnapshotError(`protocol ${i} lacks slug, name or TVL`);
+    }
+    if (seen.has(p.slug)) throw new SnapshotError(`duplicate protocol slug: ${p.slug}`);
+    seen.add(p.slug);
+    if (p.listed_at != null && !validDate(p.listed_at)) throw new SnapshotError(`invalid listed_at for ${p.slug}`);
+    if (p.mcap_usd != null && (typeof p.mcap_usd !== 'number' || !Number.isFinite(p.mcap_usd) || p.mcap_usd < 0)) throw new SnapshotError(`invalid mcap_usd for ${p.slug}`);
+    for (const field of ['gecko_id', 'symbol'] as const) {
+      if (p[field] != null && typeof p[field] !== 'string') throw new SnapshotError(`invalid ${field} for ${p.slug}`);
     }
     return {
       slug: p.slug,
       name: p.name,
       category: typeof p.category === 'string' ? p.category : null,
-      chains: Array.isArray(p.chains) ? p.chains.filter((c): c is string => typeof c === 'string') : [],
+      chains: Array.isArray(p.chains) ? [...new Set(p.chains.filter((c): c is string => typeof c === 'string').map((c) => c.trim()).filter(Boolean))] : [],
       tvl_usd: p.tvl_usd,
       change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
       mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
       listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
-      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id : null,
-      symbol: typeof p.symbol === 'string' ? p.symbol : null,
+      gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id.trim() || null : null,
+      symbol: typeof p.symbol === 'string' ? p.symbol.trim() || null : null,
     };
   });
   return {
@@ -598,6 +489,16 @@ export function parseSnapshot(text: string): Snapshot {
 
 export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null {
   const slugs = new Set(board.map((r) => r.slug));
+  if (slugs.size !== board.length) return 'duplicate board slugs';
+  const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
+  for (const slug of snapshot.watchlist) {
+    const p = index.get(slug);
+    if (p && !isRankable(p)) return `watchlist conflict: ${slug} is ${tokenStatus(p)} and/or excluded by the ranking rules`;
+  }
+  for (const slug of slugs) {
+    const p = index.get(slug);
+    if (!p || !isRankable(p)) return `ineligible board slug: ${slug}`;
+  }
   const missing = snapshot.watchlist.filter((s) => !slugs.has(s));
   if (missing.length > 0) return `missing ${missing.length} watchlist slugs: ${missing.slice(0, 5).join(', ')}`;
   const ranks = board.map((r) => r.rank).sort((a, b) => a - b);
