@@ -22,6 +22,7 @@ const shots = [
   { name: '1-board.png', route: '', waitFor: '#rows tr' },
   { name: '2-detail.png', route: 'steakhouse-financial', waitFor: '#detail .formula' },
   { name: '3-filtered.png', route: 'category=Risk%20Curators', waitFor: '#rows tr' },
+  { name: '4-model.png', route: 'model', waitFor: '#model .formula' },
 ];
 
 import { mkdirSync, writeFileSync } from 'node:fs';

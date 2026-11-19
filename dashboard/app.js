@@ -211,7 +211,6 @@
     if (!r) return;
     var isWatch = WATCH.has(r.slug);
     var chains = Array.isArray(r.chains) ? r.chains : [];
-    var base = r.tvl_usd * r.peer_multiple;
     var html = '';
 
     html += '<div class="detail-head">';
@@ -237,19 +236,27 @@
     }
 
     html += '<div class="cols">';
-    html += '<div class="card"><h3>Model breakdown \u2014 <span class="muted" style="font-weight:400">impliedValue()</span></h3>';
-    html += '<div class="formula">implied = round( <b>TVL</b> \u00d7 <b>peer_multiple</b> \u00d7 <b>growth</b> \u00d7 <b>maturity</b> \u00d7 <b>chain</b> )<br>' +
+    html += '<div class="card howto"><h3>How this value is computed</h3>';
+    html += '<div class="formula">implied = <b>TVL</b> \u00d7 <b>peerMultiple</b> \u00d7 <b>growthMult</b> \u00d7 <b>maturityMult</b> \u00d7 <b>chainMult</b><br>' +
       usdExact(r.tvl_usd) + ' \u00d7 ' + r.peer_multiple.toFixed(4) + ' \u00d7 ' + r.growth_multiplier.toFixed(4) + ' \u00d7 ' +
       r.maturity_multiplier.toFixed(4) + ' \u00d7 ' + r.chain_multiplier.toFixed(4) + ' = <b>' + usdExact(r.implied_value_usd) + '</b></div>';
     html += '<table class="modeltable"><tbody>';
-    html += '<tr><td class="lbl">Peer multiple<br><span class="fn">getPeerMultiple(category)</span></td><td>' + r.peer_multiple.toFixed(4) + 'x</td></tr>';
-    html += '<tr><td class="lbl">Growth multiplier<br><span class="fn">change_7d clamped -60 to +120</span></td><td>' + r.growth_multiplier.toFixed(4) + 'x</td></tr>';
-    html += '<tr><td class="lbl">Maturity multiplier<br><span class="fn">age in days, capped at 1095</span></td><td>' + r.maturity_multiplier.toFixed(4) + 'x</td></tr>';
-    html += '<tr><td class="lbl">Chain multiplier<br><span class="fn">1 + 0.04 per extra chain</span></td><td>' + r.chain_multiplier.toFixed(4) + 'x</td></tr>';
-    html += '<tr class="total"><td class="lbl">TVL \u00d7 peer multiple (base)</td><td>' + usdExact(base) + '</td></tr>';
+    html += '<tr><td class="lbl">TVL</td><td>' + usdExact(r.tvl_usd) + '</td></tr>';
+    html += '<tr><td class="lbl">peerMultiple<br><span class="fn">median mcap/TVL of live peers in ' + esc(r.category || 'its category') + ', shrunk toward the global median</span></td><td>' + r.peer_multiple.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">growthMult<br><span class="fn">7d change ' + (isNum(r.change_7d) ? r.change_7d.toFixed(2) + '%' : 'not reported') + ', clamped -60 to +120</span></td><td>' + r.growth_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">maturityMult<br><span class="fn">age ' + (isNum(r.age_days) ? r.age_days + ' days' : 'not recorded, 365 used') + ', capped at 1095</span></td><td>' + r.maturity_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">chainMult<br><span class="fn">' + chains.length + ' chain' + (chains.length === 1 ? '' : 's') + ', 1 + 0.04 per extra chain</span></td><td>' + r.chain_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr class="total"><td class="lbl">implied value (rounded)</td><td>' + usdExact(r.implied_value_usd) + '</td></tr>';
     html += '</tbody></table>';
-    html += '<p class="muted" style="font-size:12px;margin:10px 0 0">peer_multiple ' + r.peer_multiple.toFixed(4) + ' \u00b7 peer_count ' + r.peer_count +
-      ' \u00b7 7d change ' + (isNum(r.change_7d) ? r.change_7d.toFixed(2) + '%' : 'not reported') + ' \u00b7 age_days ' + (isNum(r.age_days) ? r.age_days : 'not recorded') + '</p>';
+    if (isNum(r.category_median)) {
+      if (r.peer_count > 0) {
+        html += '<p class="peermid">median mcap/TVL of ' + r.peer_count + ' live peer' + (r.peer_count === 1 ? '' : 's') +
+          ' in ' + esc(r.category || 'its category') + ': <b>' + r.category_median.toFixed(3) + '</b></p>';
+      } else {
+        html += '<p class="peermid">no live peers in ' + esc(r.category || 'this category') + ' yet: the multiple falls back to the global median <b>' +
+          (isNum(D.global_median) ? D.global_median.toFixed(3) : '\u2014') + '</b></p>';
+      }
+    }
     html += peerBox(r.category);
     html += '</div>';
     html += '<div class="card"><h3>Farm steps before a launch</h3><ol class="steps"></ol></div>';
@@ -379,6 +386,28 @@
         (cards[j].s ? '<span class="sub">' + esc(cards[j].s) + '</span>' : '') + '</div>';
     }
     st.innerHTML = html;
+  }
+
+  function renderTop10() {
+    var box = el('top10');
+    if (!box) return;
+    var top = ROWS.slice().sort(function (a, b) { return b.implied_value_usd - a.implied_value_usd; }).slice(0, 10);
+    if (!top.length) return;
+    var max = top[0].implied_value_usd;
+    var W = 660, H = 200, rowH = 17, padT = 26, labelW = 172, valW = 84;
+    var s = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Top 10 implied values">';
+    s += '<text x="0" y="14" class="t10title">Top 10 implied value</text>';
+    for (var i = 0; i < top.length; i++) {
+      var r = top[i];
+      var y = padT + i * rowH;
+      var bw = Math.max(3, Math.round((r.implied_value_usd / max) * (W - labelW - valW - 14)));
+      var label = r.name.length > 20 ? r.name.slice(0, 19) + '\u2026' : r.name;
+      s += '<text x="0" y="' + (y + 12) + '" class="t10lbl">#' + r.rank + ' ' + esc(label) + '</text>';
+      s += '<rect x="' + labelW + '" y="' + (y + 4) + '" width="' + bw + '" height="11" rx="2" class="t10bar' + (i === 0 ? ' top' : '') + '"></rect>';
+      s += '<text x="' + (W - 4) + '" y="' + (y + 12) + '" text-anchor="end" class="t10val">' + usd(r.implied_value_usd) + '</text>';
+    }
+    s += '</svg>';
+    box.innerHTML = s;
   }
 
   function uniqueValues(list, key) {
@@ -543,6 +572,7 @@
   function init() {
     renderMeta();
     renderStats();
+    renderTop10();
     buildControls();
     applyRoute();
     syncControls();

@@ -22,6 +22,20 @@
 <main>
 <section id="board" class="view">
   <div class="stats" id="stats"></div>
+  <div class="card method">
+    <div class="methodtext">
+      <h3>How the model prices each row</h3>
+      <p class="mformula">implied = <b>TVL</b> × <b>peerMultiple</b> × <b>growthMult</b> × <b>maturityMult</b> × <b>chainMult</b></p>
+      <ul class="methodlist">
+        <li><b>peerMultiple</b> — the median mcap/TVL of live-token peers in the same category, shrunk toward the global median</li>
+        <li><b>growthMult</b> — this week's TVL change, clamped; a fall is penalised harder than a rise is rewarded</li>
+        <li><b>maturityMult</b> — how long the protocol has been live; newer protocols read lower</li>
+        <li><b>chainMult</b> — 1 plus 0.04 per extra chain, capped</li>
+      </ul>
+      <p class="methodlink">See any protocol's detail view for its exact factors.</p>
+    </div>
+    <div class="top10" id="top10"></div>
+  </div>
   <div class="controls">
     <input id="search" type="search" placeholder="Search name or slug…" autocomplete="off">
     <select id="category"><option value="">All categories</option></select>

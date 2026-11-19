@@ -89,6 +89,7 @@ export interface RadarRow {
   growth_multiplier: number;
   maturity_multiplier: number;
   chain_multiplier: number;
+  category_median: number;
   farm_steps: string[];
 }
 
@@ -111,6 +112,7 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  global_median: number;
   peer_table: PeerStats[];
   rows: RadarRow[];
   live: LiveRow[];
@@ -143,7 +145,7 @@ function medianSorted(values: number[]): number {
   return (values[mid - 1]! + values[mid]!) / 2;
 }
 
-export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number; byCategory: Map<string, number>; peerCounts: Map<string, number> } {
+export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number; byCategory: Map<string, number>; peerCounts: Map<string, number>; catMedians: Map<string, number> } {
   const ratios: number[] = [];
   const byCat = new Map<string, number[]>();
   for (const p of snapshot.protocols) {
@@ -165,6 +167,7 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
   const table: PeerStats[] = [];
   const multMap = new Map<string, number>();
   const peerCounts = new Map<string, number>();
+  const catMedians = new Map<string, number>();
   for (const [cat, arr] of byCat.entries()) {
     arr.sort((a, b) => a - b);
     const catMed = medianSorted(arr);
@@ -174,11 +177,12 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
     table.push({ category: cat, peers: n, catMedian: round4(catMed), multiple: round4(clamped) });
     multMap.set(cat, clamped);
     peerCounts.set(cat, n);
+    catMedians.set(cat, catMed);
   }
   table.sort((a, b) => b.multiple - a.multiple || a.category.localeCompare(b.category));
   const result = new Map<string, number>();
   for (const [k, v] of multMap.entries()) result.set(k, v);
-  return { table, globalMedian, byCategory: result, peerCounts };
+  return { table, globalMedian, byCategory: result, peerCounts, catMedians };
 }
 
 function getPeerMultiple(
@@ -200,6 +204,7 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
+const round6 = (n: number): number => Math.round(n * 1e6) / 1e6;
 
 export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
@@ -256,37 +261,158 @@ function gasEstimate(chain: string, capital: number): string {
   return '$1-3';
 }
 
-function actionFor(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} USDC to ${name} on ${chain} and keep the position open`;
-  if (c.includes('dex') || c.includes('yield') || c.includes('leveraged farm')) return `Provide $${capital} liquidity to ${name}'s main pool on ${chain} and keep the LP position`;
-  if (c.includes('bridge')) return `Bridge $${capital} USDC to ${chain} via ${name} and use the bridged funds in its app`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} of the chain's native asset through ${name} and hold the receipt token`;
-  if (c.includes('perpetual') || c.includes('derivative')) return `Deposit $${capital} USDC as margin on ${name} and open one small hedged position`;
-  if (c.includes('prediction')) return `Fund $${capital} into ${name} and place one market position on an active outcome`;
-  if (c.includes('curator') || c.includes('allocator')) return `Deposit $${capital} into a ${name} vault on ${chain} and retain the vault shares`;
-  if (c.includes('risk')) return `Deposit $${capital} into a ${name} vault on ${chain} and retain the vault shares`;
-  if (c.includes('capital')) return `Deposit $${capital} into a ${name} managed vault on ${chain} and retain the vault shares`;
-  if (c.includes('stable')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain}`;
-  if (c.includes('rwa')) return `Mint $${capital} of the yield-bearing RWA token on ${chain} via ${name} and hold it`;
-  if (c.includes('insurance')) return `Purchase $${capital} of cover from ${name} on ${chain} and keep the policy active`;
-  if (c.includes('index')) return `Mint $${capital} of the index token via ${name} on ${chain} and hold the position`;
-  if (c.includes('launchpad')) return `Commit $${capital} to ${name} on ${chain} and participate in the next launch event`;
-  if (c.includes('option')) return `Buy $${capital} of options exposure through ${name} on ${chain} and hold to expiry`;
-  if (c.includes('payment')) return `Send $${capital} of payments volume through ${name} on ${chain} and keep the account active`;
-  return `Deposit $${capital} USDC into ${name} on ${chain} and keep the position open`;
+interface StepKit {
+  action: (n: string, c: number, ch: string) => string;
+  second: (n: string, c: number, ch: string) => string;
+  weekly: (n: string) => string;
 }
 
-function secondChainAction(p: SnapshotProtocol, capital: number, chain2: string): string | null {
-  if (p.chains.length < 2) return null;
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp')) return `Repeat the supply on ${chain2}: deposit $${capital} USDC to ${name} there for cross-chain activity`;
-  if (c.includes('dex') || c.includes('yield')) return `Add $${capital} liquidity to ${name} on ${chain2} to show multi-chain usage`;
-  if (c.includes('bridge')) return `Bridge another $${capital} via ${name} from ${chain2} back to the first chain to demonstrate round-trip usage`;
-  if (c.includes('staking') || c.includes('restak')) return `Stake $${capital} through ${name} on ${chain2} as well to diversify chain exposure`;
-  return `Use ${name} on ${chain2} with $${capital} to establish cross-chain presence`;
+const LEND_KIT: StepKit = {
+  action: (n, c, ch) => `Supply $${c} of a major stablecoin to ${n} on ${ch} and keep the supply open`,
+  second: (n, c, ch) => `Repeat the supply on ${ch}: deposit $${c} of a stablecoin to ${n} there and keep both positions`,
+  weekly: (n) => `Perform one small supply, borrow or repayment on ${n} each week to keep the account active`,
+};
+
+const CDP_KIT: StepKit = {
+  action: (n, c, ch) => `Lock $${c} of a major stablecoin as collateral in ${n} on ${ch} to open a position`,
+  second: (n, c, ch) => `Open a second small CDP position in ${n} on ${ch} with $${c} to show cross-chain usage`,
+  weekly: (n) => `Make one small collateral adjustment in ${n} each week to keep the position active`,
+};
+
+const STAKE_KIT: StepKit = {
+  action: (n, c, ch) => `Stake $${c} of the underlying asset through ${n} on ${ch} and hold the staked position`,
+  second: (n, c, ch) => `Stake $${c} through ${n} on ${ch} as well to diversify chain exposure`,
+  weekly: (n) => `Re-stake or compound rewards through ${n} once a week to keep the position active`,
+};
+
+const DERIV_KIT: StepKit = {
+  action: (n, c, ch) => `Deposit $${c} as margin on ${n} on ${ch} and open one small capped position`,
+  second: (n, c, ch) => `Open one more small capped position on ${n} at ${ch} with $${c}`,
+  weekly: (n) => `Roll or adjust your small position on ${n} once a week to keep the margin active`,
+};
+
+const PRED_KIT: StepKit = {
+  action: (n, c, ch) => `Fund $${c} into ${n} on ${ch} and place one small position on an active outcome`,
+  second: (n, c, ch) => `Place one small position in ${n} on ${ch} as well to show cross-chain usage`,
+  weekly: (n) => `Place one small position on a fresh market in ${n} each week to stay active`,
+};
+
+const DEX_KIT: StepKit = {
+  action: (n, c, ch) => `Provide $${c} of the main pair as liquidity to ${n} on ${ch} and keep the pool position`,
+  second: (n, c, ch) => `Add $${c} of liquidity to ${n}'s main pool on ${ch} to show multi-chain usage`,
+  weekly: (n) => `Swap through ${n} or rebalance your pool position once a week to stay active`,
+};
+
+const VAULT_KIT: StepKit = {
+  action: (n, c, ch) => `Deposit $${c} into ${n}'s vault on ${ch} and keep the position`,
+  second: (n, c, ch) => `Deposit $${c} into ${n}'s vault on ${ch} as well to show multi-chain usage`,
+  weekly: (n) => `Top up or rebalance ${n}'s vault once a week to keep the deposit active`,
+};
+
+const STABLE_KIT: StepKit = {
+  action: (n, c, ch) => `Mint or deposit $${c} of the stable asset through ${n} on ${ch} and hold it`,
+  second: (n, c, ch) => `Mint $${c} of the stable through ${n} on ${ch} as well to show cross-chain usage`,
+  weekly: (n) => `Swap a small amount into or out of the stable through ${n} each week to stay active`,
+};
+
+const RWA_KIT: StepKit = {
+  action: (n, c, ch) => `Mint $${c} of ${n}'s tokenized asset on ${ch} and hold it`,
+  second: (n, c, ch) => `Mint $${c} of the tokenized asset via ${n} on ${ch} as well to show cross-chain usage`,
+  weekly: (n) => `Check the ${n} position and make one small adjustment each week to keep it active`,
+};
+
+const PAY_KIT: StepKit = {
+  action: (n, c, ch) => `Keep $${c} on ${n} on ${ch} and run one small payment through it`,
+  second: (n, c, ch) => `Run one small payment through ${n} on ${ch} as well to show multi-chain usage`,
+  weekly: (n) => `Run one small payment or settlement through ${n} each week to keep the account active`,
+};
+
+const INS_KIT: StepKit = {
+  action: (n, c, ch) => `Buy $${c} of cover from ${n} on ${ch} and keep the policy active`,
+  second: (n, c, ch) => `Keep a second small policy with ${n} on ${ch} to show multi-chain usage`,
+  weekly: (n) => `Check the ${n} policy each week and keep it in force without lapses`,
+};
+
+const INDEX_KIT: StepKit = {
+  action: (n, c, ch) => `Mint $${c} of the index token via ${n} on ${ch} and hold the position`,
+  second: (n, c, ch) => `Mint $${c} of the index token via ${n} on ${ch} as well to show cross-chain usage`,
+  weekly: (n) => `Rebalance or top up the index position via ${n} once a week to stay active`,
+};
+
+const GOV_KIT: StepKit = {
+  action: (n, c, ch) => `Hold $${c} in ${n} on ${ch} and take part in one governance vote`,
+  second: (n, c, ch) => `Use ${n} on ${ch} with $${c} as well, so your participation spans chains`,
+  weekly: (n) => `Cast or delegate one governance vote via ${n} each week to stay active`,
+};
+
+const LOCK_KIT: StepKit = {
+  action: (n, c, ch) => `Lock $${c} worth of an asset in ${n} on ${ch} for a set vesting period`,
+  second: (n, c, ch) => `Place a second small lock in ${n} on ${ch} to show multi-chain usage`,
+  weekly: (n) => `Check the ${n} lock each week and keep the locked position intact until it vests`,
+};
+
+const MARKET_KIT: StepKit = {
+  action: (n, c, ch) => `Buy one listed asset through ${n} on ${ch} for around $${c} and keep it`,
+  second: (n, c, ch) => `Make one small trade through ${n} on ${ch} as well to show multi-chain usage`,
+  weekly: (n) => `Make one small trade through ${n} each week to keep the account active`,
+};
+
+const LAUNCH_KIT: StepKit = {
+  action: (n, c, ch) => `Commit $${c} to ${n} on ${ch} and join its next public round`,
+  second: (n, c, ch) => `Commit $${c} to ${n} on ${ch} as well, tracking its rounds on both chains`,
+  weekly: (n) => `Check ${n}'s next round each week and keep your commitment ready to join`,
+};
+
+const AI_KIT: StepKit = {
+  action: (n, c, ch) => `Use ${n}'s main service on ${ch} with $${c} and keep the account funded`,
+  second: (n, c, ch) => `Use ${n}'s main service on ${ch} with $${c} as well to show multi-chain usage`,
+  weekly: (n) => `Use ${n}'s main service with a small amount once a week to keep the account active`,
+};
+
+const PRIV_KIT: StepKit = {
+  action: (n, c, ch) => `Hold $${c} of a major asset in ${n} on ${ch} and keep the position`,
+  second: (n, c, ch) => `Hold part of the position in ${n} on ${ch} as well to show multi-chain usage`,
+  weekly: (n) => `Make one small adjustment to the ${n} position each week to keep it active`,
+};
+
+const CHAIN_KIT: StepKit = {
+  action: (n, c, ch) => `Keep $${c} in an active ${n} account on ${ch} and run normal transactions through it`,
+  second: (n, c, ch) => `Keep a second ${n} account on ${ch} with $${c} to show multi-chain presence`,
+  weekly: (n) => `Run a couple of normal transactions on ${n} each week to keep the account active`,
+};
+
+const GENERIC_KIT: StepKit = {
+  action: (n, c, ch) => `Use ${n}'s main product on ${ch} with $${c} and keep the position open`,
+  second: (n, c, ch) => `Use ${n}'s main product on ${ch} with $${c} as well to show multi-chain usage`,
+  weekly: (n) => `Perform one qualifying interaction on ${n} each week (deposit, swap or vote) to stay active`,
+};
+
+function kitFor(category: string | null): StepKit {
+  const c = (category ?? '').toLowerCase();
+  if (c.includes('bridge')) return GENERIC_KIT;
+  const kits: [RegExp, StepKit][] = [
+    [/lending|cede/, LEND_KIT],
+    [/cdp/, CDP_KIT],
+    [/restak|staking|anchor btc|decentralized btc/, STAKE_KIT],
+    [/derivatives|options|collateral markets|synthetics/, DERIV_KIT],
+    [/prediction/, PRED_KIT],
+    [/\bdex|farm/, DEX_KIT],
+    [/yield|allocator|curator|basis trading|liquidity manager/, VAULT_KIT],
+    [/stable|algo|reserve currency/, STABLE_KIT],
+    [/rwa/, RWA_KIT],
+    [/payment|crypto card/, PAY_KIT],
+    [/insurance/, INS_KIT],
+    [/index/, INDEX_KIT],
+    [/governance/, GOV_KIT],
+    [/locker/, LOCK_KIT],
+    [/nft|otc/, MARKET_KIT],
+    [/launch/, LAUNCH_KIT],
+    [/\bai\b|agent/, AI_KIT],
+    [/privacy/, PRIV_KIT],
+    [/^chain$/, CHAIN_KIT],
+  ];
+  for (const [re, kit] of kits) if (re.test(c)) return kit;
+  return GENERIC_KIT;
 }
 
 export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
@@ -294,20 +420,18 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   const capital = capitalFor(p.tvl_usd);
   const hold = holdDaysFor(age);
   const gas = gasEstimate(chain, capital);
-  const action = actionFor(p, capital, chain);
+  const kit = kitFor(p.category);
   const steps: string[] = [];
   steps.push(`Create a dedicated wallet for farming with only the funds you plan to deploy, keeping the seed phrase stored offline securely`);
-  steps.push(`${action}. Expected gas: ${gas}. Setup time: about 15 minutes`);
+  steps.push(`${kit.action(p.name, capital, chain)}. Expected gas: ${gas}. Setup time: about 15 minutes`);
   if (p.chains.length >= 2) {
     const chain2 = p.chains[1]!;
-    const cross = secondChainAction(p, capital, chain2);
-    if (cross !== null) steps.push(`${cross}. Gas: ${gasEstimate(chain2, capital)}. Time: 15 minutes`);
+    steps.push(`${kit.second(p.name, capital, chain2)}. Gas: ${gasEstimate(chain2, capital)}. Time: 15 minutes`);
   }
-  steps.push(`Perform one qualifying interaction per week (deposit, borrow, swap, or vote) to maintain active status. Cost: ~$2 gas weekly`);
+  steps.push(`${kit.weekly(p.name)}. Cost: ~$2 gas weekly`);
   steps.push(`Hold the position for at least ${hold} days so your activity spans multiple snapshots and qualifies for any future distribution`);
   steps.push(`Before withdrawing, visit only the protocol's official site to check points or rewards. Never pay a fee to claim and never follow third-party claim links`);
   steps.push(`Log every transaction, date, wallet address and amount in a personal tracker so you can reproduce or unwind the position later`);
-  while (steps.length < 3) steps.push(`Monitor ${p.name} announcements on its official channels for any changes to the farming requirements`);
   return steps.map((s) => {
     if (s.length > 600) return s.slice(0, 597) + '...';
     if (s.length < 20) return s + '. Hold and verify on the protocol page.';
@@ -315,8 +439,8 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
   });
 }
 
-export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number } {
-  const { table: peerTable, globalMedian, byCategory, peerCounts } = computePeerTable(snapshot);
+export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number; catMedians: Map<string, number> } {
+  const { table: peerTable, globalMedian, byCategory, peerCounts, catMedians } = computePeerTable(snapshot);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   for (const slug of snapshot.watchlist) {
@@ -361,7 +485,7 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: 
     },
     farm_steps: farmSteps(s.p, s.age),
   }));
-  return { board, peerTable, globalMedian };
+  return { board, peerTable, globalMedian, catMedians };
 }
 
 export function liveRows(snapshot: Snapshot): LiveRow[] {
@@ -380,7 +504,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-export function radarRow(row: BoardRow): RadarRow {
+export function radarRow(row: BoardRow, categoryMedian: number): RadarRow {
   return {
     rank: row.rank,
     slug: row.slug,
@@ -398,14 +522,20 @@ export function radarRow(row: BoardRow): RadarRow {
     growth_multiplier: row.model.growth_multiplier,
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
+    category_median: round6(categoryMedian),
     farm_steps: row.farm_steps,
   };
 }
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData; peerTable: PeerStats[]; globalMedian: number } {
-  const { board, peerTable, globalMedian } = buildBoard(snapshot);
+  const { board, peerTable, globalMedian, catMedians } = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const earlySize = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
+  const medianFor = (category: string | null): number => {
+    const key = category ?? '(no category)';
+    const m = catMedians.get(key);
+    return m !== undefined ? m : globalMedian;
+  };
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -415,8 +545,9 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     board_size: board.length,
     early_size: earlySize,
     live_size: live.length,
+    global_median: round6(globalMedian),
     peer_table: peerTable,
-    rows: board.map(radarRow),
+    rows: board.map((r) => radarRow(r, medianFor(r.category))),
     live,
     watchlist: snapshot.watchlist.slice(),
   };

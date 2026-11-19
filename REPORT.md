@@ -380,6 +380,194 @@ lại 3 ảnh (17/11 ~12:22); dossier **748,801 B**, byte-identical.
     `0c92f684…`, `git diff` trống) → mọi implied giữ nguyên (Steakhouse
     vẫn **1,094,803,096**).
   - Gate chạy lại: **8/8 PASS**.
-  - 3 ảnh **chụp lại 17/11 ~12:22** (bảng 6.3): `2-detail.png` hiện đủ
-    **7 farm steps** của Steakhouse; `3-filtered.png` hiện đủ tiêu đề +
-    stats (33/33 Risk Curators); `1-board.png` không đổi.
+   - 3 ảnh **chụp lại 17/11 ~12:22** (bảng 6.3): `2-detail.png` hiện đủ
+     **7 farm steps** của Steakhouse; `3-filtered.png` hiện đủ tiêu đề +
+     stats (33/33 Risk Curators); `1-board.png` không đổi.
+
+## 7. Phase 4 (v2) — model transparency + category-aware farm steps (19/11)
+
+Đây là **run 4** (run 3 chết lúc 13:01 +07 ngày 18/11, đúng giữa bước thay
+generator farm-steps trong `lib/model.ts`; edit cuối của run 3 **không** áp
+dụng). Mọi số dưới đây đo trực tiếp từ file trong repo sau khi chạy lại
+`node main.ts --input ../kit/token-radar-01-kit/input/snapshot.json --output
+out`. Không sửa `main.ts`. Không đọc/ghi `wallet.json`, `bundle*`,
+`.gitignore`.
+
+### 7.1. Item 1 — công bố 6 hệ số mỗi dòng trong `out/data.js`
+
+Mỗi `RadarRow` giờ mang đủ 6 trường số (kiểm: **226/226 dòng** có cả 6,
+loại `number`): `peer_multiple`, `peer_count`, `growth_multiplier`,
+`maturity_multiplier`, `chain_multiplier`, `category_median` (làm tròn 6
+chữ số). `RadarData` thêm `global_median` = **0.213803** (= global median
+winsorised 128 peer, khớp Phase 1 §1). Ba bước đã có sẵn trong run 3 và run 4
+chỉ xác minh: `RadarRow.category_median`, `RadarData.global_median`,
+`computePeerTable` trả thêm `catMedians`, `buildBoard` trả `catMedians`, hàm
+trợ `round6`.
+
+**Kiểm chứng (trước khi chạm item 3):** chạy lại `main.ts` → `out/`,
+`md5sum out/board.json` = **`0c92f684…` — GIỮ NGUYÊN** (item 1 chỉ thêm dữ
+liệu mô tả, không đổi công thức). Determinism: chạy 2 lần vào `out/` và
+`out2/`, `diff -r out out2` **trống** (byte-identical, kể cả 3 PNG).
+`out/data.js`: 280,796 B → 284,081 B (thêm `category_median` + `global_median`).
+
+### 7.2. Item 2 — panel "How this value is computed" (detail view)
+
+Trong `dashboard/app.js` (`renderDetail`) và `app.css`, thay card "Model
+breakdown" bằng panel mới:
+
+- Dòng công thức đúng như brief:
+  `implied = TVL × peerMultiple × growthMult × maturityMult × chainMult`.
+- Dưới đó là phép nhân bằng **số thật của chính dòng** (Steakhouse:
+  `$2,753,981,495 × 0.4104 × 0.9803 × 0.8236 × 1.2000 = $1,094,803,096`).
+- Bảng 5 hệ số, mỗi hàng kèm chú giải nguồn: TVL, peerMultiple (median
+  mcap/TVL của peer live cùng category, shrunk về global median), growthMult
+  (7d change kẹp -60…+120), maturityMult (age, chặn 1095 ngày), chainMult
+  (số chain, 1 + 0.04/chain), rồi hàng tổng `implied value (rounded)`.
+- Dòng peer median + peer count, đúng format brief:
+  `median mcap/TVL of 1 live peer in Risk Curators: 1.000`. (Category không
+  có peer live → dòng fallback về global median, kèm giá trị.)
+- Giữ nguyên palette dark navy + teal; không có URL ngoài.
+
+### 7.3. Item 3 — farm steps theo category (`lib/model.ts`)
+
+Thay bộ skeleton chung 6 bước bằng generator **category-aware**: một
+`StepKit` cho từng nhóm category (action / second-chain / weekly đều đổi theo
+category), gán bằng `kitFor(category)`:
+
+- Nhóm đã map (tất cả category có mặt trong snapshot): Lending/CeDeFi/
+  Uncollateralized Lending (supply collateral / borrow), CDP (lock collateral),
+  Staking/Restaking/Liquid Staking/Restaked·Anchor·Decentralized BTC (stake),
+  Derivatives/Options/Collateral Markets/Synthetics/Interest Rate Derivatives
+  (margin + one small capped position), Prediction (one market position),
+  Dexs/Farm/Leveraged Farming (liquidity in main pool), Yield/Yield
+  Aggregator/Allocator/Curators/Basis Trading/Liquidity Manager (deposit into
+  a vault), Stablecoin/Algo-Stables/Reserve Currency (mint/deposit stable),
+  RWA (mint tokenized asset), Payments/Crypto Card (run a payment), Insurance
+  (buy cover), Indexes (mint index token), Governance (vote), Token Locker
+  (lock), NFT/OTC (one trade), Launchpad (commit to a round), AI Agents /
+  Decentralized AI (use main service), Privacy (hold asset), Chain (active
+  account).
+- **Bridge / Canonical Bridge / Cross Chain Bridge → luôn rơi về kit generic**
+  (không bao giờ sinh bước "bridge"); category lạ khác cũng rơi về kit generic
+  "use the protocol's main product".
+- Giữ nguyên những gì đã chạy tốt: mức tiền cụ thể theo TVL (`capitalFor`,
+  lớn hơn cho hàng top), gas + setup time ở bước action, bước hoạt động tuần,
+  bước giữ vị trí 30–60 ngày (`holdDaysFor`), bước an toàn (chỉ site chính
+  chủ, không trả phí claim), bước ghi log. Không bịa tên vault/pool/sản phẩm
+  cụ thể — action giữ ở cấp category.
+
+**Kiểm chứng:** 226/226 dòng có **6–7 bước**, mỗi bước 20–600 ký tự; 0 bước
+chứa động từ "bridge". So file `board.json` trước/sau item 3 từng trường:
+**0 khác biệt ngoài `farm_steps`** — mọi trường số (implied, các multiplier,
+rank, TVL,…) **trùng byte** (Steakhouse vẫn **1,094,803,096**).
+
+> **Lưu ý về md5 `board.json` (đọc kỹ):** công thức (mọi trường số) **giữ
+> nguyên byte-identical**. Nhưng `board.json` = `{ rows: board }` và mỗi row
+> **chứa trường `farm_steps`** (gate đọc farm_steps từ chính field này).
+> Vì item 3 bắt buộc viết lại farm_steps, md5 file `board.json` buộc phải
+> đổi: `0c92f684…` → **`e03b0f48…`**.Checkpoint "công thức không đổi" đúng
+> nghĩa (md5 vẫn `0c92f684…`) được giữ ở **sau item 1, trước item 3**; từ
+> item 3 trở đi, md5 đổi **duy nhất** do phần chữ farm_steps, không phải do
+> công thức. Không thể vừa viết lại farm_steps (item 3) vừa giữ md5
+> `board.json` không đổi — hai yêu cầu này trái nhau vì farm_steps nằm trong
+> file đó.
+
+### 7.4. Item 4 — top-10 implied-value bar chart (board)
+
+Thêm `renderTop10()` trong `app.js` + container `#top10` trong `index.html`
+(cùng card "method", bên phải). Sinh **inline-SVG** thuần từ `data.js`,
+không resource ngoài: 10 hàng, mỗi hàng = nhãn `#rank Tên` + thanh ngang
+(tỉ lệ theo implied, hàng #1 tô teal) + giá trị `usd()`. Tiêu đề "Top 10
+implied value". Render thật (đo bounding box: SVG 723×219 trong card).
+
+### 7.5. Item 5 — panel "Method" trên board
+
+Thêm card `.method` trên board (trên controls): trái là **4 dòng thường
+giải thích model** — peerMultiple (median mcap/TVL của peer live cùng
+category, shrunk về global median), growthMult (TVL 7d, kẹp, giảm bị phạt
+nặng hơn tăng), maturityMult (tuổi protocol, non hơn đọc thấp hơn),
+chainMult (1 + 0.04/chain, có trần) — kèm dòng công thức và câu
+**"See any protocol's detail view for its exact factors."** (nối tới
+breakdown chi tiết). Phải là top-10 chart (7.4).
+
+### 7.6. Item 6 — screenshot thứ 4, `4-model.png`
+
+Thêm shot `{ name:'4-model.png', route:'steakhouse-financial',
+waitFor:'#detail .peermid' }` vào `tools/shoot.mjs` (chờ panel mới render).
+Chụp lại **cả 4** bằng `node tools/shoot.mjs` (chromium-1243, viewport
+1440×800, deviceScaleFactor 1, dark, scroll về đầu trước mỗi shot).
+
+| ảnh | nội dung | kích thước | dung lượng (B) |
+|-----|----------|-----------|---------------:|
+| `1-board.png` | board: header + stats + **method panel** + **top-10 chart** + controls + 226 dòng | 1440×800 | **147,835** |
+| `2-detail.png` | detail Steakhouse: panel "How this value is computed" (công thức + 5 hệ số + peer median) + đủ **7 farm steps** | 1440×800 | **219,771** |
+| `3-filtered.png` | board lọc Risk Curators: header + stats + method + chart, 33/33 dòng | 1440×800 | **169,997** |
+| `4-model.png` | detail Steakhouse, chờ `.peermid`: panel factor breakdown + 7 farm steps (chứng nhận item 2) | 1440×800 | **219,771** |
+
+Tất cả ≤ 512 KiB. **Cách "xem bằng mắt":** model phiên này (Qwen3.8-27B qua
+Token Lab) **không nhận ảnh vào** — thay bằng đo, như Phase 2 §6.3:
+(1) Playwright: **0 console error, 0 page error** trên cả 4 view;
+(2) đo bounding-box từng phần tử so viewport 1440×800 — header không bị
+cắt (bottom 157), stats + method card + top-10 chart nằm trọn trong
+viewport (method bottom 534, chart 299–519), detail: panel factor breakdown
+trọn (`.peermid` bottom 786 < 800) và **cả 7 farm steps** nằm trong
+viewport (`ol.steps` bottom 774, step cuối bottom 774); (3) đọc **text thật**
+render ra: công thức với số thật, đủ 7 bước, 4 dòng method, 10 hàng chart
+(#1 Steakhouse Financi… $1.09B … #10 Upshift $72.8M); (4) decode PNG: đủ
+1440×800, **10,168–11,352 màu RGB khác nhau** (không phải khung màu đặc),
+62–67% pixel không phải nền, có pixel teal (accent). `2-detail.png` và
+`4-model.png` cùng một route nên gần trùng nội dung (đúng ý: 4-model là
+chứng nhận panel mới).
+
+### 7.7. Item 7 — mục này trong REPORT.md
+
+### 7.8. Số đo trước / sau (đo thật từ repo)
+
+| artefact | trước (HEAD `11e6be4`) | sau |
+|----------|----------------------:|----:|
+| `out/board.json` md5 | `0c92f684…` | `e03b0f48…` (chỉ farm_steps đổi, xem 7.3) |
+| `out/board.json` bytes | 296,197 | 293,740 |
+| `out/data.js` bytes | 280,796 | 284,081 |
+| dashboard source (3 file) | 35,987 B | **39,782 B** (index 4,228 + css 9,825 + js 25,729) — dưới trần 64 KB và dưới mục tiêu 55 KB |
+| `out/dossier.json` bytes | 748,801 | 1,051,831 |
+| `screenshots/1-board.png` | 147,243 | 147,835 |
+| `screenshots/2-detail.png` | 210,147 | 219,771 |
+| `screenshots/3-filtered.png` | 175,744 | 169,997 |
+| `screenshots/4-model.png` | — (chưa có) | 219,771 |
+
+Board: 226 dòng (186 early, 24 live set aside), 40 watchlist; implied giảm
+dần, 226 giá trị phân biệt; Steakhouse #1 = **1,094,803,096** (không đổi).
+
+### 7.9. Kiểm cuối (tất cả chạy lại trên repo)
+
+- **Gate** `node tools/check-gate.mjs out ../kit/.../snapshot.json`:
+
+  ```
+  PASS  dashboard_files - 3 files, 39782 bytes
+  PASS  board_file - 226 rows, valid slugs
+  PASS  sorted_by_value - ranks 1..226, 226 distinct implied values
+  PASS  coverage - all 40 watchlist slugs present
+  PASS  farm_steps - all 226 rows have 3-12 steps of 20-600 chars
+  PASS  screenshots - 4 images OK
+  PASS  dossier_matches - 1051831 bytes, byte-identical
+  PASS  dossier_text_cap - 40048 bytes of text
+
+  8/8 gate checks passed
+  ```
+
+- **md5 công thức:** sau item 1 (trước item 3) `board.json` md5 =
+  `0c92f684…` giữ nguyên; sau item 3 đổi `e03b0f48…` **chỉ** do farm_steps
+  (mọi trường số trùng byte, xem 7.3).
+- **Determinism:** chạy 2 lần vào `out/` và `out2/`, `diff -r out out2`
+  **trống** (byte-identical toàn bộ, kể cả 4 PNG).
+- **Cú pháp:** `node --check dashboard/app.js` OK, `node --check
+  tools/shoot.mjs` OK.
+- **4 screenshot** chụp lại, kiểm bằng đo (Playwright 0 error + bounding-box
+  + text + decode PNG, chi tiết 7.6).
+- **No URL / no secrets:** `grep -rn "http" dashboard/ tools/shoot.mjs` →
+  **trống**; grep `api_key|secret|private_key|sk-…|0x[a-f0-9]{40}` trên
+  `dashboard/ lib/ main.ts tools/` → **trống**. Không đọc/ghi `wallet.json`.
+- **`git status`:** chỉ đúng các file dự định đổi — `lib/model.ts`,
+  `dashboard/{index.html,app.js,app.css}`, `tools/shoot.mjs`, plus artefact
+  trong `out/` và `screenshots/` (được `main.ts`/`shoot.mjs` sinh lại).
+  `git diff --stat`: 17 files, +346/−86 (xem commit của điều phối viên).
