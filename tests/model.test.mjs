@@ -86,3 +86,17 @@ test('peer audit exports precisely the observations used by the model', () => {
   assert.deepEqual(observations.find(p => p.slug === 'capped'), { slug: 'capped', name: 'Atlas Lending', category: 'Lending', raw: 10, bounded: 1 });
   assert.equal(observations.filter(p => p.category === 'Lending').length, radar.rows[0].peer_count);
 });
+
+test('parser accepts all known punctuated DefiLlama slugs without rewriting them', () => {
+  const slugs = [
+    'alpaca-finance-2.0', 'bancor-v2.1', 'biconomy.com', 'crypto.com-liquid-staking',
+    'ether.fi-liquid', 'ether.fi-stake', 'inceptionlrt-(isolated-restaking)', 'lombard-btc.b',
+    'lorenzo-susd1+', 'sparkdex-v3.1', 'stake.link-liquid', 'ston.fi', 'summer.fi-pro',
+    'uranium.io', 'vfat.io', 'wemix.fi-staking',
+  ];
+  const snapshot = { ...fixture(), protocols: slugs.map(slug => protocol({ slug })), watchlist: slugs };
+  assert.deepEqual(parse(snapshot).protocols.map(p => p.slug), slugs);
+  assert.deepEqual(parse(snapshot).watchlist, slugs);
+  snapshot.protocols[0].slug = 'not/a-slug';
+  assert.throws(() => parse(snapshot), /lacks slug/);
+});

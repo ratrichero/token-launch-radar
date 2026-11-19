@@ -1,6 +1,7 @@
 # Token Launch Radar
 
 An entry for [token-radar-01](https://make.fun/c/token-radar-01/) on make.fun.
+See the [official bounty page](https://make.fun/bounty/token-radar-01).
 
 ![token-radar-01](https://make.fun/badge/token-radar-01.svg)
 ![rank](https://make.fun/badge/token-radar-01/ratrichero/token-launch-radar/rank.svg)

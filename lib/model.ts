@@ -440,7 +440,7 @@ function validDate(value: unknown): value is string {
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
-const validSlug = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]*$/.test(value);
+const validSlug = (value: unknown): value is string => typeof value === 'string' && /^[a-z0-9][a-z0-9_.()+-]*$/.test(value);
 
 export function parseSnapshot(text: string): Snapshot {
   let raw: unknown;
