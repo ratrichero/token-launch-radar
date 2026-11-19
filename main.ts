@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { SnapshotError, boardIssue, buildRadar, dataScript, parseSnapshot } from './lib/model.ts';
+import { captureInputs, manifestName, verifyCapture, shotNames } from './lib/capture.mjs';
+import { loadFarmEvidence } from './lib/farm-evidence.mjs';
 import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
@@ -12,7 +14,7 @@ const SCREENSHOT_CAPS = { max: 4, max_bytes: 524_288 };
 const DASHBOARD_CAPS = { max_files: 400, max_bytes: 4_194_304 };
 const IMAGE_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
-const usage = 'Usage: node main.ts [--input <snapshot.json|directory>] [--output <directory>] [--screenshots <directory>]';
+const usage = 'Usage: node main.ts [--input <snapshot.json|directory>] [--output <directory>] [--screenshots <directory>] [--submission] [--farm-evidence <json>]';
 function fail(message: string, code = 2): never {
   process.stderr.write(`token radar: ${message}\n`);
   process.exit(code);
@@ -20,7 +22,7 @@ function fail(message: string, code = 2): never {
 
 function options() {
   try {
-    return parseArgs({ options: { input: { type: 'string' }, output: { type: 'string' }, screenshots: { type: 'string' }, help: { type: 'boolean', short: 'h' } } }).values;
+    return parseArgs({ options: { input: { type: 'string' }, output: { type: 'string' }, screenshots: { type: 'string' }, submission: { type: 'boolean' }, 'farm-evidence': { type: 'string' }, help: { type: 'boolean', short: 'h' } } }).values;
   } catch (error) {
     fail(`${(error as Error).message}\n${usage}`);
   }
@@ -46,22 +48,37 @@ function loadSnapshot() {
 }
 const snapshot = loadSnapshot();
 const { board, radar } = buildRadar(snapshot);
+try {
+  radar.farm_evidence = loadFarmEvidence(args['farm-evidence'] ?? join(here, 'data/farm-evidence.json'), snapshot.as_of);
+} catch (error) {
+  fail(`farm evidence: ${(error as Error).message}`);
+}
 const issue = boardIssue(board, snapshot);
 if (issue !== null) {
   process.stderr.write(`token radar: the model wrote a board the gate refuses: ${issue}\n`);
   process.exit(1);
 }
 
+const data = dataScript(radar);
+if (args.submission) {
+  if (!args.screenshots) fail('--submission requires --screenshots from tools/shoot.mjs');
+  if (existsSync(out) && readdirSync(out).length) fail('--submission requires a fresh output directory');
+  try {
+    verifyCapture(args.screenshots, captureInputs(join(here, 'dashboard'), data));
+  } catch (error) {
+    fail(`cannot verify screenshots: ${(error as Error).message}`);
+  }
+}
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
-writeFileSync(join(out, 'data.js'), dataScript(radar));
+writeFileSync(join(out, 'data.js'), data);
 
-function copyFiles(from: string, to: string): string[] {
+function copyFiles(from: string, to: string, only?: string[]): string[] {
   if (!existsSync(from)) return [];
   mkdirSync(to, { recursive: true });
   const copied: string[] = [];
   for (const name of readdirSync(from)) {
-    if (name.startsWith('.')) continue;
+    if (name.startsWith('.') || name === manifestName || (only && !only.includes(name))) continue;
     const path = join(from, name);
     if (!statSync(path).isFile()) continue;
     copyFileSync(path, join(to, name));
@@ -72,7 +89,7 @@ function copyFiles(from: string, to: string): string[] {
 
 copyFiles(join(here, 'dashboard'), join(out, 'dashboard'));
 const shotSource = args.screenshots ?? join(here, 'screenshots');
-const shots = copyFiles(shotSource, join(out, 'screenshots'));
+const shots = copyFiles(shotSource, join(out, 'screenshots'), args.submission ? shotNames : undefined);
 if (shots.length < 3) {
   process.stderr.write(`token radar: ${shotSource} holds ${shots.length} image${shots.length === 1 ? '' : 's'}: hand in 3, the board, a detail view and a filtered view\n`);
   process.exit(1);

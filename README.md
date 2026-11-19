@@ -54,7 +54,7 @@ build (do not shoot the synthetic demo for submission):
 npm ci
 npx playwright install chromium
 node tools/shoot.mjs radar-build/shots radar-build/dashboard
-node main.ts --input /path/to/snapshot.json --screenshots radar-build/shots --output radar-build/final
+node main.ts --input /path/to/snapshot.json --screenshots radar-build/shots --submission --output radar-build/final
 node tools/check-gate.mjs radar-build/final /path/to/snapshot.json
 ```
 
@@ -107,3 +107,34 @@ with the official sealed snapshot.
 | `REPORT.md` | Historical submission notes, not current verification |
 
 MIT licensed — see [LICENSE](LICENSE).
+
+## Submission audit
+
+Compare the tracked radar-2 board with a radar-3 run without changing either artifact:
+
+```sh
+node tools/compare-radar.mjs out/board.json /path/to/snapshot.json > radar-diff.json
+```
+
+The report includes additions/removals, all watchlist conflicts, both top-20 lists
+joined by slug, and factor changes. A board conflict returns exit 1 but still emits
+JSON. The baseline board cannot prove snapshot identity, and its rounded factors
+make the attribution approximate. The dashboard detail separately shows the actual
+category and global peer samples, raw/bounded ratios, and the applied multiplier.
+
+`tools/shoot.mjs` writes a capture manifest with SHA-256 hashes of data, dashboard
+files, and each screenshot. `--submission` requires that manifest and a fresh output
+directory. It refuses mismatches before writing output and copies only the four
+expected images. This checks consistency, not who produced the images.
+
+## Source-backed farm notes
+
+`data/farm-evidence.json` is an optional editor-maintained object keyed by slug,
+with fields `source` (official HTTPS page), `checked_at` (ISO date on or before
+the snapshot), `networks` (nonempty string array), `eligibility`, and `exit`.
+Use `--farm-evidence path/to/file.json` to supply a reviewed manifest for a build;
+use the same manifest for capture and final packaging. A note is displayed separately
+from the unverified category examples. The build checks format, not whether a
+page is official or its claims are true: review those manually. The default file
+is empty until sources and the official top ten are available; do not use guessed
+eligibility or imply that every protocol has a program.

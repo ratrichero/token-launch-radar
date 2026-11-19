@@ -103,7 +103,10 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
+export interface PeerObservation { slug: string; name: string; category: string; raw: number | null; bounded: number }
 export interface RadarData {
+  farm_evidence?: Record<string, { source: string; checked_at: string; networks: string[]; eligibility: string; exit: string }>;
+  peer_observations: PeerObservation[];
   as_of: string;
   source: string;
   floor_usd: number;
@@ -146,8 +149,9 @@ function medianSorted(values: number[]): number {
   return (values[mid - 1]! + values[mid]!) / 2;
 }
 
-export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number | null; byCategory: Map<string, number>; peerCounts: Map<string, number>; catMedians: Map<string, number> } {
+export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; globalMedian: number | null; byCategory: Map<string, number>; peerCounts: Map<string, number>; catMedians: Map<string, number>; observations: PeerObservation[] } {
   const ratios: number[] = [];
+  const observations: PeerObservation[] = [];
   const byCat = new Map<string, number[]>();
   for (const p of snapshot.protocols) {
     if (tokenStatus(p) !== 'live' || p.category === 'CEX') continue;
@@ -156,6 +160,7 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
     const w = Math.min(PEER_WINSOR_HI, Math.max(PEER_WINSOR_LO, r));
     ratios.push(w);
     const cat = p.category ?? '(no category)';
+    observations.push({ slug: p.slug, name: p.name, category: cat, raw: Number.isFinite(r) ? r : null, bounded: w });
     let arr = byCat.get(cat);
     if (arr === undefined) {
       arr = [];
@@ -183,7 +188,7 @@ export function computePeerTable(snapshot: Snapshot): { table: PeerStats[]; glob
   table.sort((a, b) => b.multiple - a.multiple || a.category.localeCompare(b.category));
   const result = new Map<string, number>();
   for (const [k, v] of multMap.entries()) result.set(k, v);
-  return { table, globalMedian, byCategory: result, peerCounts, catMedians };
+  return { table, globalMedian, byCategory: result, peerCounts, catMedians, observations: observations.sort((a, b) => a.slug.localeCompare(b.slug)) };
 }
 
 function getPeerMultiple(
@@ -312,8 +317,8 @@ export function farmSteps(p: SnapshotProtocol): string[] {
   ].map((step) => step.length <= 600 ? step : step.slice(0, 597) + '...');
 }
 
-export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number | null; catMedians: Map<string, number> } {
-  const { table: peerTable, globalMedian, byCategory, peerCounts, catMedians } = computePeerTable(snapshot);
+export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: PeerStats[]; globalMedian: number | null; catMedians: Map<string, number>; observations: PeerObservation[] } {
+  const { table: peerTable, globalMedian, byCategory, peerCounts, catMedians, observations } = computePeerTable(snapshot);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   for (const slug of snapshot.watchlist) {
@@ -358,7 +363,7 @@ export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; peerTable: 
     },
     farm_steps: farmSteps(s.p),
   }));
-  return { board, peerTable, globalMedian, catMedians };
+  return { board, peerTable, globalMedian, catMedians, observations };
 }
 
 export function liveRows(snapshot: Snapshot): LiveRow[] {
@@ -401,7 +406,7 @@ export function radarRow(row: BoardRow, categoryMedian: number | null): RadarRow
 }
 
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData; peerTable: PeerStats[]; globalMedian: number | null } {
-  const { board, peerTable, globalMedian, catMedians } = buildBoard(snapshot);
+  const { board, peerTable, globalMedian, catMedians, observations } = buildBoard(snapshot);
   const live = liveRows(snapshot);
   const earlySize = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const medianFor = (category: string | null): number | null => {
@@ -421,6 +426,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     global_median: globalMedian,
     global_peer_count: peerTable.reduce((sum, p) => sum + p.peers, 0),
     peer_table: peerTable,
+    peer_observations: observations,
     rows: board.map((r) => radarRow(r, medianFor(r.category))),
     live,
     watchlist: snapshot.watchlist.slice(),

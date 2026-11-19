@@ -11,11 +11,13 @@ const cwd = fileURLToPath(new URL('..', import.meta.url));
 const temp = mkdtempSync(join(tmpdir(), 'radar-browser-'));
 let browser;
 try {
+  const evidence = join(temp, 'evidence.json');
+  writeFileSync(evidence, JSON.stringify({ atlas: { source: 'https://example.invalid/docs', checked_at: '2026-11-01', networks: ['Base'], eligibility: 'Synthetic note for test only', exit: 'Preview the withdrawal quote' } }));
   const build = (name, input) => {
     const snapshot = join(temp, `${name}.json`);
     const output = join(temp, name);
     writeFileSync(snapshot, JSON.stringify(input));
-    execFileSync(process.execPath, ['main.ts', '--input', snapshot, '--output', output], { cwd });
+    execFileSync(process.execPath, ['main.ts', '--input', snapshot, '--output', output, '--farm-evidence', evidence], { cwd });
     return pathToFileURL(join(output, 'dashboard', 'index.html')).href;
   };
   const app = build('demo', fixture());
@@ -59,6 +61,9 @@ try {
     await page.getByText('Copyable calculation with full precision').click();
     assert.match(await page.locator('#detail pre').textContent(), /Math\.max\(1, Math\.round/);
     assert.match(await page.locator('#detail .steps li').first().textContent(), /does not verify/);
+    assert.ok(await page.getByText('Synthetic note for test only', { exact: false }).isVisible());
+    await page.getByText('Global median sample (2)').click();
+    assert.ok(await page.getByText('Yield Peer (live-yield)').isVisible());
     await page.goBack();
     await page.locator('#board:not(.hidden)').waitFor();
     assert.equal(page.url(), share);

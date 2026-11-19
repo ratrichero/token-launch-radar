@@ -1,3 +1,4 @@
+import { captureInputs, captureManifest, manifestName } from '../lib/capture.mjs';
 import { chromium } from 'playwright';
 import { pathToFileURL } from 'node:url';
 import { resolve, join } from 'node:path';
@@ -6,6 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 const [outDir, dashDir] = process.argv.slice(2);
 if (!outDir || !dashDir) throw new Error('Usage: node tools/shoot.mjs <screenshots-dir> <built-dashboard-dir>');
 const url = pathToFileURL(resolve(dashDir, 'index.html')).href;
+const inputs = captureInputs(dashDir);
 const browser = await chromium.launch({ executablePath: process.env.CHROME });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 800 }, deviceScaleFactor: 1, colorScheme: 'dark' });
@@ -32,11 +34,13 @@ try {
     images.push([name, png]);
   }
   if (errors.length) throw new Error(errors.join('\n'));
+  if (JSON.stringify(inputs) !== JSON.stringify(captureInputs(dashDir))) throw new Error('Dashboard changed during capture');
   mkdirSync(outDir, { recursive: true });
   for (const [name, png] of images) {
     writeFileSync(join(outDir, name), png);
     console.log(`${name}: ${png.length} bytes`);
   }
+  writeFileSync(join(outDir, manifestName), captureManifest(inputs, images) + '\n');
 } finally {
   await browser.close();
 }

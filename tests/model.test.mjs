@@ -76,3 +76,13 @@ test('farm steps verify before spending and keep the action category-specific', 
   assert.ok(steps.every((s) => s.length >= 20 && s.length <= 600));
   assert.doesNotMatch(steps.join(' '), /qualifies for|\$2 gas|repeat the supply/i);
 });
+
+test('peer audit exports precisely the observations used by the model', () => {
+  const snapshot = fixture();
+  snapshot.protocols.push(protocol({ slug: 'capped', tvl_usd: 1, mcap_usd: 10, gecko_id: 'cap', symbol: 'CAP' }));
+  const { radar } = buildRadar(snapshot);
+  const observations = radar.peer_observations;
+  assert.equal(observations.length, radar.global_peer_count);
+  assert.deepEqual(observations.find(p => p.slug === 'capped'), { slug: 'capped', name: 'Atlas Lending', category: 'Lending', raw: 10, bounded: 1 });
+  assert.equal(observations.filter(p => p.category === 'Lending').length, radar.rows[0].peer_count);
+});

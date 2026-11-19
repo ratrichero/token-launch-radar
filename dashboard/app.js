@@ -276,9 +276,31 @@
       html += '<p class="peermid">No category peers. The model uses the global median (subject to the model limits): <b>' +
         (isNum(D.global_median) ? D.global_median.toFixed(3) + '×' : 'not available') + '</b>.</p>';
     }
-    html += peerBox(r.category);
+    if (Array.isArray(D.peer_observations) && D.peer_observations.length) {
+      var category = r.category ?? '(no category)';
+      var observations = D.peer_observations;
+      var local = observations.filter(function (p) { return p.category === category; });
+      var blended = local.length ? (local.length * r.category_median + 3 * D.global_median) / (local.length + 3) : D.global_median;
+      html += '<p class="lead">Global median: ' + D.global_median.toFixed(4) + '× · Before final limits: ' + blended.toFixed(4) + '× · Applied: ' + r.peer_multiple.toFixed(4) + '×</p>';
+      function peerAudit(label, rows) {
+        return '<details class="exact"><summary>' + label + ' (' + rows.length + ')</summary><div class="tablewrap"><table><thead><tr><th>Protocol</th><th>Raw ratio</th><th>Bounded ratio</th></tr></thead><tbody>' +
+          rows.map(function (p) { return '<tr><td>' + esc(p.name) + ' (' + esc(p.slug) + ')</td><td>' + (p.raw === null ? 'Overflow' : p.raw.toPrecision(6)) + '</td><td>' + p.bounded.toPrecision(6) + '</td></tr>'; }).join('') +
+          '</tbody></table></div></details>';
+      }
+      if (local.length) html += peerAudit('Category peers', local);
+      html += peerAudit('Global median sample', observations);
+    } else {
+      html += peerBox(r.category);
+    }
     html += '</div>';
-    html += '<div class="card"><h3>Farm steps before a launch</h3><p class="lead">Unverified category examples, not a confirmed rewards program or eligibility checklist.</p><ol class="steps"></ol></div>';
+    html += '<div class="card"><h3>Farm steps before a launch</h3>';
+    var evidence = D.farm_evidence && Object.hasOwn(D.farm_evidence, slug) ? D.farm_evidence[slug] : null;
+    if (evidence) {
+      html += '<h4>Source checked on ' + esc(evidence.checked_at) + '</h4><p>Networks: ' + esc(evidence.networks.join(', ')) +
+        '</p><p>Eligibility: ' + esc(evidence.eligibility) + '</p><p>Exit: ' + esc(evidence.exit) +
+        '</p><p>Official source (copy to open): <code>' + esc(evidence.source) + '</code></p>';
+    }
+    html += '<p class="lead">The steps below are category examples, not confirmed reward conditions.</p><ol class="steps"></ol></div>';
     html += '</div>';
     el('detail').innerHTML = html;
     renderSteps(r);
