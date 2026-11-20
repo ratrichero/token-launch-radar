@@ -27,8 +27,9 @@ node tools/check-gate.mjs demo-out demo-snapshot.json
 
 Open `demo-out/dashboard/index.html` directly. The fixture uses fake protocols
 and values and is not suitable for market or farming decisions. The tracked
-`out/` and `screenshots/` are **historical radar-2 submission artifacts**, not
-output from the current radar-3 code; they are kept intact for provenance.
+`out/` and `screenshots/` are the output of the current radar-3 code, rebuilt
+from the official snapshot with the four dashboard screenshots re-shot against
+the rebuilt dashboard.
 
 ## Build from the official snapshot
 
@@ -47,7 +48,7 @@ output directory. Open `radar-build/dashboard/index.html`; `board.json`,
 entry, or one with live or ambiguous metadata is an explicit build error:
 coverage does not justify labelling a protocol pre-token.
 
-The first build copies the historical screenshots for packaging. To produce a
+The first build copies the tracked screenshots for packaging. To produce a
 current submission, capture the rebuilt UI and pass those images to a second
 build (do not shoot the synthetic demo for submission):
 
@@ -111,10 +112,11 @@ MIT licensed — see [LICENSE](LICENSE).
 
 ## Submission audit
 
-Compare the tracked radar-2 board with a radar-3 run without changing either artifact:
+Compare an earlier board (for example the radar-2 board from Git history) with a
+radar-3 run without changing either artifact:
 
 ```sh
-node tools/compare-radar.mjs out/board.json /path/to/snapshot.json > radar-diff.json
+node tools/compare-radar.mjs /path/to/radar-2-board.json /path/to/snapshot.json > radar-diff.json
 ```
 
 The report includes additions/removals, all watchlist conflicts, both top-20 lists

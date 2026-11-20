@@ -100,3 +100,16 @@ test('parser accepts all known punctuated DefiLlama slugs without rewriting them
   snapshot.protocols[0].slug = 'not/a-slug';
   assert.throws(() => parse(snapshot), /lacks slug/);
 });
+
+test('parser maps the DefiLlama mcap_usd -1 sentinel to unknown instead of rejecting it', () => {
+  const snapshot = fixture();
+  snapshot.protocols[0].mcap_usd = -1;
+  const parsed = parse(snapshot);
+  assert.equal(parsed.protocols[0].mcap_usd, null);
+  assert.equal(tokenStatus(parsed.protocols[0]), 'pre-token');
+  for (const bad of [-2, -0.5]) {
+    const s = fixture();
+    s.protocols[0].mcap_usd = bad;
+    assert.throws(() => parse(s), /invalid mcap_usd/);
+  }
+});

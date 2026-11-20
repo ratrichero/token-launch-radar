@@ -5,7 +5,7 @@
 
   if (!D || !Array.isArray(D.rows) || D.rows.length === 0) {
     var m = document.querySelector('main');
-    if (m) m.textContent = 'No radar data. Run main.ts first so it writes data.js beside this page.';
+    if (m) m.textContent = 'No radar data. Run main.ts first so it writes data.js in the parent output directory.';
     return;
   }
 
@@ -14,9 +14,9 @@
   var PEERS = Array.isArray(D.peer_table) ? D.peer_table : [];
   var WATCH = new Set(Array.isArray(D.watchlist) ? D.watchlist : []);
   var FLOOR = typeof D.floor_usd === 'number' ? D.floor_usd : 50000000;
-  var BY_SLUG = {};
+  var BY_SLUG = Object.create(null);
   ROWS.forEach(function (r) { BY_SLUG[r.slug] = r; });
-  var PEER_BY_CAT = {};
+  var PEER_BY_CAT = Object.create(null);
   PEERS.forEach(function (p) { PEER_BY_CAT[p.category] = p; });
 
   var viewEls = {
@@ -78,29 +78,41 @@
   }
 
 
-  function routeFromHash() {
-    var h = '';
-    try { h = location.hash.slice(1); } catch (e) { h = ''; }
-    return h;
-  }
-
   function applyRoute() {
-    var h = routeFromHash();
-    if (!h && window.ROUTE) h = window.ROUTE;
-    if (!h) return;
-    if (BY_SLUG[h]) { state.slug = h; state.view = 'detail'; return; }
-    if (h === 'live' || h === 'peers' || h === 'model') { state.view = h; return; }
-    if (h.indexOf('category=') === 0) state.category = decodeURIComponent(h.slice(9));
-    else if (h.indexOf('chain=') === 0) state.chain = decodeURIComponent(h.slice(6));
-    else if (h.indexOf('q=') === 0) state.q = decodeURIComponent(h.slice(2));
-    else if (h === 'watch') state.watch = true;
+    var h = location.hash.slice(1) || window.ROUTE || '';
+    var params = new URLSearchParams(h);
+    var view = params.get('view') || h;
+    var slug = params.get('protocol') || h;
+    state.slug = BY_SLUG[slug] ? slug : null;
+    state.view = state.slug ? 'detail' : ['live', 'peers', 'model'].indexOf(view) >= 0 ? view : 'board';
+    state.q = params.get('q') || '';
+    state.category = params.get('category') || '';
+    state.chain = params.get('chain') || '';
+    ['category', 'chain'].forEach(function (key) {
+      if (!Array.from(el(key).options).some(function (item) { return item.value === state[key]; })) state[key] = '';
+    });
+    var sort = params.get('sort');
+    state.sort = ['tvl', 'implied', 'change'].indexOf(sort) >= 0 ? sort : 'rank';
+    state.desc = state.sort !== 'rank';
+    state.watch = h === 'watch' || params.get('watch') === '1';
   }
 
-  function setRoute(h) {
-    try {
-      if (h) history.replaceState(null, '', '#' + h);
-      else history.replaceState(null, '', location.pathname + location.search);
-    } catch (e) { /* file:// can refuse replaceState; the hash is a nicety */ }
+  function route(view, slug) {
+    var params = new URLSearchParams();
+    if (slug) params.set('protocol', slug);
+    else if (view !== 'board') params.set('view', view);
+    if (state.q) params.set('q', state.q);
+    if (state.category) params.set('category', state.category);
+    if (state.chain) params.set('chain', state.chain);
+    if (state.watch) params.set('watch', '1');
+    if (state.sort !== 'rank') params.set('sort', state.sort);
+    return '#' + params.toString();
+  }
+
+  function updateBoard() {
+    // Replacing avoids adding a history entry for every search keystroke.
+    history.replaceState(null, '', route('board'));
+    renderBoard();
   }
 
   function filteredRows() {
@@ -127,6 +139,7 @@
         y = isNum(b.change_7d) ? b.change_7d : -Infinity;
       } else { x = a.rank; y = b.rank; }
       if (x === y) return a.rank - b.rank;
+      if (x === -Infinity || y === -Infinity) return x === -Infinity ? 1 : -1;
       return x < y ? -dir : dir;
     });
     return out;
@@ -152,12 +165,13 @@
       (state.category ? ' \u00b7 ' + state.category : '') +
       (state.chain ? ' \u00b7 ' + state.chain : '') +
       (state.q ? ' \u00b7 search "' + state.q + '"' : '');
-    var html = '';
+    var html = rows.length ? '' : '<tr><td colspan="8" class="empty">No protocols match these filters. Try Reset.</td></tr>';
     for (var i = 0; i < rows.length; i++) {
       var r = rows[i];
-      html += '<tr class="rowlink" tabindex="0" data-slug="' + esc(r.slug) + '">' +
+      html += '<tr>' +
         '<td class="rank">' + r.rank + '</td>' +
-        '<td class="name">' + esc(r.name) + (WATCH.has(r.slug) ? ' <span class="pill watch">watchlist</span>' : '') + '</td>' +
+        '<td class="name"><a class="protocol-link" href="' + esc(route('detail', r.slug)) + '">' + esc(r.name) + '</a>' +
+        ' <span class="pill ' + (WATCH.has(r.slug) ? 'watch">Watchlist' : '">Early') + '</span></td>' +
         '<td class="cat">' + esc(r.category || '(none)') + '</td>' +
         '<td class="chains">' + chainsHtml(r.chains) + '</td>' +
         '<td>' + usd(r.tvl_usd) + '</td>' +
@@ -172,7 +186,6 @@
       var opt = sortEl.options[sortEl.selectedIndex];
       if (opt) opt.textContent = opt.textContent.replace(/\s[\u25b2\u25bc]$/, '') + sortIcon(state.sort);
     }
-    setRoute(state.sort === 'rank' && !state.desc && !state.q && !state.category && !state.chain && !state.watch ? '' : 'board');
   }
 
   function sortIcon(key) {
@@ -213,11 +226,11 @@
     var chains = Array.isArray(r.chains) ? r.chains : [];
     var html = '';
 
-    html += '<div class="detail-head">';
-    html += '<div><h1 class="detail-title"><span class="rk">#' + r.rank + '</span>' + esc(r.name) +
+    html += '<a class="back board-link" href="' + esc(route('board')) + '">Back to board</a><div class="detail-head">';
+    html += '<div><h1 class="detail-title" tabindex="-1"><span class="rk">#' + r.rank + '</span>' + esc(r.name) +
       (isWatch ? ' <span class="pill watch">watchlist</span>' : '') + '</h1>';
     html += '<p class="detail-sub">' + esc(r.category || '(no category)') + ' \u00b7 <span class="slug" style="display:inline">' + esc(r.slug) + '</span> \u00b7 ' +
-      (isWatch ? 'the watchlist names it: no token recorded, TVL at or above the ' + usd(FLOOR) + ' floor'
+      (isWatch ? 'watchlist: no token metadata recorded in the snapshot'
                : 'early find: no token recorded, TVL below the ' + usd(FLOOR) + ' floor') + '</p></div>';
     html += '<div class="bigval"><b>' + usd(r.implied_value_usd) + '</b><span>implied value</span></div>';
     html += '</div>';
@@ -225,7 +238,7 @@
     html += '<div class="dgrid">' +
       '<div class="dstat"><span>TVL</span><b>' + usd(r.tvl_usd) + '</b></div>' +
       '<div class="dstat"><span>7d change</span><b>' + pct(r.change_7d) + '</b></div>' +
-      '<div class="dstat"><span>Age, no token</span><b>' + age(r.age_days, r.listed_at) + '</b></div>' +
+      '<div class="dstat"><span>Age since listing</span><b>' + age(r.age_days, r.listed_at) + '</b></div>' +
       '<div class="dstat"><span>Listed</span><b>' + esc(r.listed_at || '\u2014') + '</b></div>' +
       '<div class="dstat"><span>Chains</span><b>' + chains.length + '</b></div>' +
       '<div class="dstat"><span>Peer multiple</span><b>' + r.peer_multiple.toFixed(4) + 'x</b></div>' +
@@ -239,27 +252,55 @@
     html += '<div class="card howto"><h3>How this value is computed</h3>';
     html += '<div class="formula">implied = <b>TVL</b> \u00d7 <b>peerMultiple</b> \u00d7 <b>growthMult</b> \u00d7 <b>maturityMult</b> \u00d7 <b>chainMult</b><br>' +
       usdExact(r.tvl_usd) + ' \u00d7 ' + r.peer_multiple.toFixed(4) + ' \u00d7 ' + r.growth_multiplier.toFixed(4) + ' \u00d7 ' +
-      r.maturity_multiplier.toFixed(4) + ' \u00d7 ' + r.chain_multiplier.toFixed(4) + ' = <b>' + usdExact(r.implied_value_usd) + '</b></div>';
+      r.maturity_multiplier.toFixed(4) + ' \u00d7 ' + r.chain_multiplier.toFixed(4) + ' \u2248 <b>' + usdExact(r.implied_value_usd) + '</b></div>';
+    if (D.model_version === 'radar-3') {
+      html += '<details class="exact"><summary>Copyable calculation with full precision</summary><pre class="block">' +
+        'Math.max(1, Math.round(' + [r.tvl_usd, r.peer_multiple, r.growth_multiplier, r.maturity_multiplier, r.chain_multiplier].join(' * ') + '))' +
+        ' = ' + r.implied_value_usd + '</pre></details>';
+    }
+    html += '<p class="muted">The display rounds the factors above; the model uses full precision.</p>';
     html += '<table class="modeltable"><tbody>';
     html += '<tr><td class="lbl">TVL</td><td>' + usdExact(r.tvl_usd) + '</td></tr>';
     html += '<tr><td class="lbl">peerMultiple<br><span class="fn">median mcap/TVL of live peers in ' + esc(r.category || 'its category') + ', shrunk toward the global median</span></td><td>' + r.peer_multiple.toFixed(4) + 'x</td></tr>';
     html += '<tr><td class="lbl">growthMult<br><span class="fn">7d change ' + (isNum(r.change_7d) ? r.change_7d.toFixed(2) + '%' : 'not reported') + ', clamped -60 to +120</span></td><td>' + r.growth_multiplier.toFixed(4) + 'x</td></tr>';
     html += '<tr><td class="lbl">maturityMult<br><span class="fn">age ' + (isNum(r.age_days) ? r.age_days + ' days' : 'not recorded, 365 used') + ', capped at 1095</span></td><td>' + r.maturity_multiplier.toFixed(4) + 'x</td></tr>';
-    html += '<tr><td class="lbl">chainMult<br><span class="fn">' + chains.length + ' chain' + (chains.length === 1 ? '' : 's') + ', 1 + 0.04 per extra chain</span></td><td>' + r.chain_multiplier.toFixed(4) + 'x</td></tr>';
+    html += '<tr><td class="lbl">chainMult<br><span class="fn">' + chains.length + ' chain' + (chains.length === 1 ? '' : 's') + ', 1 + 0.04 per extra chain, up to five extras</span></td><td>' + r.chain_multiplier.toFixed(4) + 'x</td></tr>';
     html += '<tr class="total"><td class="lbl">implied value (rounded)</td><td>' + usdExact(r.implied_value_usd) + '</td></tr>';
     html += '</tbody></table>';
-    if (isNum(r.category_median)) {
-      if (r.peer_count > 0) {
-        html += '<p class="peermid">median mcap/TVL of ' + r.peer_count + ' live peer' + (r.peer_count === 1 ? '' : 's') +
-          ' in ' + esc(r.category || 'its category') + ': <b>' + r.category_median.toFixed(3) + '</b></p>';
-      } else {
-        html += '<p class="peermid">no live peers in ' + esc(r.category || 'this category') + ' yet: the multiple falls back to the global median <b>' +
-          (isNum(D.global_median) ? D.global_median.toFixed(3) : '\u2014') + '</b></p>';
-      }
+    if (D.global_median === null || D.global_peer_count === 0) {
+      html += '<p class="peermid">No eligible peers. The multiple is an assumed floor, not a market observation.</p>';
+    } else if (r.peer_count > 0) {
+      html += '<p class="peermid">Peer support: ' + r.peer_count + ' category peer(s); ' +
+        (r.peer_count < 3 ? 'thin sample' : 'category data') + '. Winsorised category median: <b>' + r.category_median.toFixed(3) + '×</b>.</p>';
+    } else {
+      html += '<p class="peermid">No category peers. The model uses the global median (subject to the model limits): <b>' +
+        (isNum(D.global_median) ? D.global_median.toFixed(3) + '×' : 'not available') + '</b>.</p>';
     }
-    html += peerBox(r.category);
+    if (Array.isArray(D.peer_observations) && D.peer_observations.length) {
+      var category = r.category ?? '(no category)';
+      var observations = D.peer_observations;
+      var local = observations.filter(function (p) { return p.category === category; });
+      var blended = local.length ? (local.length * r.category_median + 3 * D.global_median) / (local.length + 3) : D.global_median;
+      html += '<p class="lead">Global median: ' + D.global_median.toFixed(4) + '× · Before final limits: ' + blended.toFixed(4) + '× · Applied: ' + r.peer_multiple.toFixed(4) + '×</p>';
+      function peerAudit(label, rows) {
+        return '<details class="exact"><summary>' + label + ' (' + rows.length + ')</summary><div class="tablewrap"><table><thead><tr><th>Protocol</th><th>Raw ratio</th><th>Bounded ratio</th></tr></thead><tbody>' +
+          rows.map(function (p) { return '<tr><td>' + esc(p.name) + ' (' + esc(p.slug) + ')</td><td>' + (p.raw === null ? 'Overflow' : p.raw.toPrecision(6)) + '</td><td>' + p.bounded.toPrecision(6) + '</td></tr>'; }).join('') +
+          '</tbody></table></div></details>';
+      }
+      if (local.length) html += peerAudit('Category peers', local);
+      html += peerAudit('Global median sample', observations);
+    } else {
+      html += peerBox(r.category);
+    }
     html += '</div>';
-    html += '<div class="card"><h3>Farm steps before a launch</h3><ol class="steps"></ol></div>';
+    html += '<div class="card"><h3>Farm steps before a launch</h3>';
+    var evidence = D.farm_evidence && Object.hasOwn(D.farm_evidence, slug) ? D.farm_evidence[slug] : null;
+    if (evidence) {
+      html += '<h4>Source checked on ' + esc(evidence.checked_at) + '</h4><p>Networks: ' + esc(evidence.networks.join(', ')) +
+        '</p><p>Eligibility: ' + esc(evidence.eligibility) + '</p><p>Exit: ' + esc(evidence.exit) +
+        '</p><p>Official source (copy to open): <code>' + esc(evidence.source) + '</code></p>';
+    }
+    html += '<p class="lead">The steps below are category examples, not confirmed reward conditions.</p><ol class="steps"></ol></div>';
     html += '</div>';
     el('detail').innerHTML = html;
     renderSteps(r);
@@ -319,8 +360,6 @@
   function renderModel() {
     var body = el('modelbody');
     if (!body) return;
-    var top = ROWS[0];
-    var last = ROWS[ROWS.length - 1];
     var topWatch = 0;
     var topLive = 0;
     for (var i = 0; i < ROWS.length; i++) {
@@ -339,7 +378,7 @@
     html += '<li><b>chain</b> = 1 + 0.04 per extra chain up to 6, for multi-chain reach; 1.00 to 1.20.</li>';
     html += '</ol></div>';
     html += '<div class="card"><h3>2. Reading the board</h3>';
-    html += '<p class="lead">Sort by rank, TVL, 7d change or implied value; filter category and chain; search a name or slug. Every row opens a detail view with the full multiplication, the peer it was priced against, and the farm steps the model wrote for it with capital, gas and hold time.</p>';
+    html += '<p class="lead">Sort by rank, TVL, 7d change or implied value; filter category and chain; search a name or slug. Every row opens a detail view with the full multiplication, the peer it was priced against, and the farm steps the model wrote for it with checks to make before risking any capital.</p>';
     html += '<div class="dgrid">';
     html += '<div class="dstat"><span>Ranked protocols</span><b>' + ROWS.length + '</b></div>';
     html += '<div class="dstat"><span>On the watchlist</span><b>' + topWatch + '</b></div>';
@@ -348,6 +387,22 @@
     html += '</div>';
     html += '<p class="muted" style="font-size:12px;margin:8px 0 0">The watchlist is the floor, never the ceiling: ' + (ROWS.length - topWatch) + ' early protocols below the ' + usd(FLOOR) + ' floor are ranked too, because a launch below the floor is still a launch.</p>';
     html += '</div>';
+    html += '</div>';
+    html += '<div class="card sensitivity"><h3>Top 10: model sensitivity</h3>' +
+      '<p class="lead">This score uses circulating market cap / TVL as a proxy, not FDV, expected rewards or a forecast. Scenarios show how scores change for the current top ten; they do not rerank the board.</p>';
+    if (D.model_version !== 'radar-3') {
+      html += '<p>Rebuild with a current snapshot to see scenarios with full-precision factors.</p>';
+    } else {
+      html += '<div class="tablewrap"><table><thead><tr><th>Protocol</th><th>Base</th><th>No chain bonus</th><th>Peer −25%</th><th>Peer +25%</th></tr></thead><tbody>';
+      ROWS.slice(0, 10).forEach(function (r) {
+        function scenario(peer, chain) {
+          return usd(Math.max(1, Math.round(r.tvl_usd * peer * r.growth_multiplier * r.maturity_multiplier * chain)));
+        }
+        html += '<tr><td>' + esc(r.name) + '</td><td>' + usd(r.implied_value_usd) + '</td><td>' + scenario(r.peer_multiple, 1) +
+          '</td><td>' + scenario(r.peer_multiple * 0.75, r.chain_multiplier) + '</td><td>' + scenario(r.peer_multiple * 1.25, r.chain_multiplier) + '</td></tr>';
+      });
+      html += '</tbody></table></div>';
+    }
     html += '</div>';
     body.innerHTML = html;
   }
@@ -362,7 +417,10 @@
     }
     var tabs = document.querySelectorAll('.tab');
     for (var i = 0; i < tabs.length; i++) {
-      tabs[i].classList.toggle('on', tabs[i].getAttribute('data-view') === name);
+      var active = tabs[i].getAttribute('data-view') === (name === 'detail' ? 'board' : name);
+      tabs[i].classList.toggle('on', active);
+      if (active) tabs[i].setAttribute('aria-current', 'page');
+      else tabs[i].removeAttribute('aria-current');
     }
     try { window.scrollTo(0, 0); } catch (e) { /* no-op */ }
   }
@@ -438,6 +496,7 @@
   }
 
   function buildControls() {
+    el('watch').textContent = 'Watchlist (' + WATCH.size + ') only';
     var cats = uniqueValues(ROWS, function (r) { return r.category; });
     fillOptions(el('category'), cats);
     fillOptions(el('chain'), allChains());
@@ -455,25 +514,10 @@
     if (wEl) wEl.setAttribute('aria-pressed', state.watch ? 'true' : 'false');
   }
 
-  function openDetail(slug) {
-    if (!BY_SLUG[slug]) return;
-    state.slug = slug;
-    renderDetail(slug);
-    showView('detail');
-    setRoute(slug);
-  }
-
-  function goBoard() {
-    state.slug = null;
-    showView('board');
-    renderBoard();
-    setRoute('');
-  }
-
-
   function renderMeta() {
     var parts = [];
     if (D.as_of) parts.push('snapshot ' + esc(D.as_of));
+    if (D.source) parts.push(esc(D.source));
     if (D.model_version) parts.push('model ' + esc(D.model_version));
     if (typeof D.board_size === 'number') parts.push(D.board_size + ' rows');
     if (typeof D.live_size === 'number') parts.push(D.live_size + ' live');
@@ -481,92 +525,53 @@
     el('meta').innerHTML = parts.map(function (p) { return '<span>' + p + '</span>'; }).join('');
   }
 
-  function bindEvents() {
-    var search = el('search');
-    search.value = state.q;
-    search.addEventListener('input', function () { state.q = search.value; renderBoard(); });
+  function renderRoute(focus) {
+    var previousSlug = state.slug;
+    applyRoute();
+    syncControls();
+    el('search').value = state.q;
+    if (state.view === 'detail') renderDetail(state.slug);
+    else if (state.view === 'live') renderLive();
+    else if (state.view === 'peers') renderPeers();
+    else if (state.view === 'model') renderModel();
+    else renderBoard();
+    showView(state.view);
+    if (focus && state.view === 'detail') document.querySelector('.detail-title').focus();
+    if (focus && state.view === 'board' && previousSlug) {
+      var links = Array.from(document.querySelectorAll('.protocol-link'));
+      var link = links.find(function (element) { return element.getAttribute('href') === route('detail', previousSlug); });
+      if (link) link.focus();
+    }
+  }
 
-    el('category').addEventListener('change', function () {
-      state.category = this.value;
-      renderBoard();
-      setRoute(state.category ? 'category=' + encodeURIComponent(state.category) : '');
-    });
-    el('chain').addEventListener('change', function () {
-      state.chain = this.value;
-      renderBoard();
-      setRoute(state.chain ? 'chain=' + encodeURIComponent(state.chain) : '');
-    });
-    el('sort').addEventListener('change', function () {
-      var v = this.value;
-      if (v === 'rank') { state.sort = 'rank'; state.desc = false; }
-      else { state.sort = v; state.desc = true; }
-      renderBoard();
+  function bindEvents() {
+    el('search').addEventListener('input', function () { state.q = this.value; updateBoard(); });
+    ['category', 'chain', 'sort'].forEach(function (key) {
+      el(key).addEventListener('change', function () {
+        state[key] = this.value;
+        state.desc = state.sort !== 'rank';
+        updateBoard();
+      });
     });
     el('watch').addEventListener('click', function () {
       state.watch = !state.watch;
       syncControls();
-      renderBoard();
-      setRoute(state.watch ? 'watch' : '');
+      updateBoard();
     });
     el('reset').addEventListener('click', function () {
-      state.q = '';
-      state.category = '';
-      state.chain = '';
+      state.q = state.category = state.chain = '';
       state.sort = 'rank';
-      state.desc = false;
-      state.watch = false;
-      search.value = '';
+      state.desc = state.watch = false;
+      el('search').value = '';
       syncControls();
-      renderBoard();
-      setRoute('');
+      updateBoard();
     });
-    el('rows').addEventListener('click', function (e) {
-      var tr = e.target.closest('tr[data-slug]');
-      if (tr) openDetail(tr.getAttribute('data-slug'));
-    });
-    el('rows').addEventListener('keydown', function (e) {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      var tr = e.target.closest('tr[data-slug]');
-      if (tr) { e.preventDefault(); openDetail(tr.getAttribute('data-slug')); }
-    });
-    el('detail').addEventListener('click', function (e) {
-      if (e.target.closest('.back')) goBoard();
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('section .back'), function (b) {
-      b.addEventListener('click', goBoard);
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
-      t.addEventListener('click', function () {
-        var v = t.getAttribute('data-view');
-        if (v === 'board') { goBoard(); return; }
-        state.slug = null;
-        if (v === 'live') renderLive();
-        if (v === 'peers') renderPeers();
-        if (v === 'model') renderModel();
-        showView(v);
-        setRoute(v);
+    document.querySelectorAll('section button.back, .tab').forEach(function (button) {
+      button.addEventListener('click', function () {
+        location.hash = route(button.getAttribute('data-view') || 'board');
       });
     });
-    window.addEventListener('hashchange', function () {
-      var h = routeFromHash();
-      state.q = '';
-      state.category = '';
-      state.chain = '';
-      state.watch = false;
-      state.slug = null;
-      state.view = 'board';
-      applyRoute();
-      search.value = state.q;
-      syncControls();
-      if (state.slug) { renderDetail(state.slug); showView('detail'); }
-      else if (state.view === 'live' || state.view === 'peers' || state.view === 'model') {
-        if (state.view === 'live') renderLive();
-        if (state.view === 'peers') renderPeers();
-        if (state.view === 'model') renderModel();
-        showView(state.view);
-        setRoute(h);
-      } else { showView('board'); renderBoard(); }
-    });
+    window.addEventListener('hashchange', function () { renderRoute(true); });
   }
 
   function init() {
@@ -574,20 +579,8 @@
     renderStats();
     renderTop10();
     buildControls();
-    applyRoute();
-    syncControls();
-    el('search').value = state.q;
     bindEvents();
-    if (state.view === 'detail' && state.slug) {
-      renderDetail(state.slug);
-      showView('detail');
-    } else {
-      renderBoard();
-      if (state.view === 'live') { renderLive(); showView('live'); }
-      else if (state.view === 'peers') { renderPeers(); showView('peers'); }
-      else if (state.view === 'model') { renderModel(); showView('model'); }
-      else showView('board');
-    }
+    renderRoute(false);
   }
 
   if (document.readyState === 'loading') {

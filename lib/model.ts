@@ -467,7 +467,7 @@ export function parseSnapshot(text: string): Snapshot {
     if (seen.has(p.slug)) throw new SnapshotError(`duplicate protocol slug: ${p.slug}`);
     seen.add(p.slug);
     if (p.listed_at != null && !validDate(p.listed_at)) throw new SnapshotError(`invalid listed_at for ${p.slug}`);
-    if (p.mcap_usd != null && (typeof p.mcap_usd !== 'number' || !Number.isFinite(p.mcap_usd) || p.mcap_usd < 0)) throw new SnapshotError(`invalid mcap_usd for ${p.slug}`);
+    if (p.mcap_usd != null && (typeof p.mcap_usd !== 'number' || !Number.isFinite(p.mcap_usd) || (p.mcap_usd < 0 && p.mcap_usd !== -1))) throw new SnapshotError(`invalid mcap_usd for ${p.slug}`);
     for (const field of ['gecko_id', 'symbol'] as const) {
       if (p[field] != null && typeof p[field] !== 'string') throw new SnapshotError(`invalid ${field} for ${p.slug}`);
     }
@@ -478,7 +478,7 @@ export function parseSnapshot(text: string): Snapshot {
       chains: Array.isArray(p.chains) ? [...new Set(p.chains.filter((c): c is string => typeof c === 'string').map((c) => c.trim()).filter(Boolean))] : [],
       tvl_usd: p.tvl_usd,
       change_7d: typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) ? p.change_7d : null,
-      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) ? p.mcap_usd : null,
+      mcap_usd: typeof p.mcap_usd === 'number' && Number.isFinite(p.mcap_usd) && p.mcap_usd !== -1 ? p.mcap_usd : null,
       listed_at: typeof p.listed_at === 'string' ? p.listed_at : null,
       gecko_id: typeof p.gecko_id === 'string' ? p.gecko_id.trim() || null : null,
       symbol: typeof p.symbol === 'string' ? p.symbol.trim() || null : null,
